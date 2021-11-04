@@ -24,14 +24,17 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#if 0
 #include <VersionHelpers.h>
 #include <WinError.h>
 
 #define SKIP_CHECK_VAR "NODE_SKIP_PLATFORM_CHECK"
 #define SKIP_CHECK_SIZE 1
 #define SKIP_CHECK_VALUE "1"
+#endif
 
 int wmain(int argc, wchar_t* wargv[]) {
+#if 0
   // Windows Server 2012 (not R2) is supported until 10/10/2023, so we allow it
   // to run in the experimental support tier.
   char buf[SKIP_CHECK_SIZE + 1];
@@ -48,6 +51,7 @@ int wmain(int argc, wchar_t* wargv[]) {
                     "platforms will not be fixed.");
     exit(ERROR_EXE_MACHINE_TYPE_MISMATCH);
   }
+#endif
 
   // Convert argv to UTF8
   char** argv = new char*[argc + 1];
