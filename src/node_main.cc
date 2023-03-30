@@ -24,17 +24,19 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#if 0
 #include <VersionHelpers.h>
 #include <WinError.h>
 
 #define SKIP_CHECK_VAR "NODE_SKIP_PLATFORM_CHECK"
 #define SKIP_CHECK_SIZE 1
 #define SKIP_CHECK_VALUE "1"
-#endif
 
 int wmain(int argc, wchar_t* wargv[]) {
-  if (!IsWindows7OrGreater()) {
+  char buf[SKIP_CHECK_SIZE + 1];
+  if (!IsWindows7OrGreater() &&
+      (GetEnvironmentVariableA(SKIP_CHECK_VAR, buf, sizeof(buf)) !=
+       SKIP_CHECK_SIZE ||
+       strncmp(buf, SKIP_CHECK_VALUE, SKIP_CHECK_SIZE + 1) != 0)) {
     fprintf(stderr, "This application is only supported on Windows 7, "
                     "Windows Server 2008 R2, or higher.");
     exit(ERROR_EXE_MACHINE_TYPE_MISMATCH);
