@@ -36,12 +36,12 @@ class V8Profile extends Profile {
   static IC_RE =
       /^(LoadGlobalIC: )|(Handler: )|(?:CallIC|LoadIC|StoreIC)|(?:Builtin: (?:Keyed)?(?:Load|Store)IC_)/;
   static BYTECODES_RE = /^(BytecodeHandler: )/;
-  static BASELINE_HANDLERS_RE = /^(Builtin: .*Baseline.*)/;
+  static SPARKPLUG_HANDLERS_RE = /^(Builtin: .*Baseline.*)/;
   static BUILTINS_RE = /^(Builtin: )/;
   static STUBS_RE = /^(Stub: )/;
 
   constructor(separateIc, separateBytecodes, separateBuiltins, separateStubs,
-        separateBaselineHandlers) {
+        separateSparkplugHandlers) {
     super();
     const regexps = [];
     if (!separateIc) regexps.push(V8Profile.IC_RE);
@@ -137,7 +137,7 @@ class CppEntriesProvider {
     let response;
     let json;
     try {
-      response = await fetch(url);
+      response = await fetch(url, { timeout: 20 });
       if (response.status == 404) {
         throw new Error(
           `Local symbol server returned 404: ${await response.text()}`);
@@ -147,7 +147,7 @@ class CppEntriesProvider {
     } catch (e) {
       if (!response || response.status == 404) {
         // Assume that the local symbol server is not reachable.
-        console.error("Disabling remote symbol loading:", e);
+        console.warn("Disabling remote symbol loading:", e);
         this._isEnabled = false;
         return;
       }
@@ -388,8 +388,8 @@ export class ArgumentsProcessor extends BaseArgumentsProcessor {
         'Separate Builtin entries'],
       '--separate-stubs': ['separateStubs', parseBool,
         'Separate Stub entries'],
-      '--separate-baseline-handlers': ['separateBaselineHandlers', parseBool,
-        'Separate Baseline Handler entries'],
+      '--separate-sparkplug-handlers': ['separateSparkplugHandlers', parseBool,
+        'Separate Sparkplug Handler entries'],
       '--linux': ['platform', 'linux',
         'Specify that we are running on *nix platform'],
       '--windows': ['platform', 'windows',
@@ -441,7 +441,7 @@ export class ArgumentsProcessor extends BaseArgumentsProcessor {
       separateBytecodes: false,
       separateBuiltins: true,
       separateStubs: true,
-      separateBaselineHandlers: false,
+      separateSparkplugHandlers: false,
       preprocessJson: null,
       sourceMap: null,
       targetRootFS: '',
@@ -478,7 +478,7 @@ export class TickProcessor extends LogReader {
       params.separateBytecodes,
       params.separateBuiltins,
       params.separateStubs,
-      params.separateBaselineHandlers,
+      params.separateSparkplugHandlers,
       params.callGraphSize,
       params.ignoreUnknown,
       params.stateFilter,
@@ -498,7 +498,7 @@ export class TickProcessor extends LogReader {
     separateBytecodes,
     separateBuiltins,
     separateStubs,
-    separateBaselineHandlers,
+    separateSparkplugHandlers,
     callGraphSize,
     ignoreUnknown,
     stateFilter,
@@ -510,10 +510,9 @@ export class TickProcessor extends LogReader {
     onlySummary,
     runtimeTimerFilter,
     preprocessJson) {
-    super({},
-      timedRange,
-      pairwiseTimedRange);
-    this.dispatchTable_ = {
+    super(timedRange, pairwiseTimedRange);
+    this.setDispatchTable({
+      __proto__: null,
       'shared-library': {
         parsers: [parseString, parseInt, parseInt, parseInt],
         processor: this.processSharedLibrary
@@ -532,10 +531,6 @@ export class TickProcessor extends LogReader {
         parsers: [parseInt, parseInt,],
         processor: this.processCodeMove
       },
-      'code-delete': {
-        parsers: [parseInt],
-        processor: this.processCodeDelete
-      },
       'code-source-info': {
         parsers: [parseInt, parseInt, parseInt, parseInt, parseString,
           parseString, parseString],
@@ -547,7 +542,7 @@ export class TickProcessor extends LogReader {
       },
       'sfi-move': {
         parsers: [parseInt, parseInt],
-        processor: this.processFunctionMove
+        processor: this.processSFIMove
       },
       'active-runtime-timer': {
         parsers: [parseString],
@@ -575,17 +570,17 @@ export class TickProcessor extends LogReader {
         processor: this.advanceDistortion
       },
       // Ignored events.
-      'profiler': null,
-      'function-creation': null,
-      'function-move': null,
-      'function-delete': null,
-      'heap-sample-item': null,
-      'current-time': null,  // Handled specially, not parsed.
+      'profiler': undefined,
+      'function-creation': undefined,
+      'function-move': undefined,
+      'function-delete': undefined,
+      'heap-sample-item': undefined,
+      'current-time': undefined,  // Handled specially, not parsed.
       // Obsolete row types.
-      'code-allocate': null,
-      'begin-code-region': null,
-      'end-code-region': null
-    };
+      'code-allocate': undefined,
+      'begin-code-region': undefined,
+      'end-code-region': undefined
+    });
 
     this.preprocessJson = preprocessJson;
     this.cppEntriesProvider_ = cppEntriesProvider;
@@ -633,7 +628,7 @@ export class TickProcessor extends LogReader {
       this.profile_ = new JsonProfile();
     } else {
       this.profile_ = new V8Profile(separateIc, separateBytecodes,
-        separateBuiltins, separateStubs, separateBaselineHandlers);
+        separateBuiltins, separateStubs, separateSparkplugHandlers);
     }
     this.codeTypes_ = {};
     // Count each tick as a time unit.
@@ -661,7 +656,7 @@ export class TickProcessor extends LogReader {
     GC: 1,
     PARSER: 2,
     BYTECODE_COMPILER: 3,
-    // TODO(cbruni): add BASELINE_COMPILER
+    // TODO(cbruni): add SPARKPLUG_COMPILER
     COMPILER: 4,
     OTHER: 5,
     EXTERNAL: 6,
@@ -728,9 +723,9 @@ export class TickProcessor extends LogReader {
 
   processCodeCreation(type, kind, timestamp, start, size, name, maybe_func) {
     if (type != 'RegExp' && maybe_func.length) {
-      const funcAddr = parseInt(maybe_func[0]);
+      const sfiAddr = parseInt(maybe_func[0]);
       const state = Profile.parseState(maybe_func[1]);
-      this.profile_.addFuncCode(type, name, timestamp, start, size, funcAddr, state);
+      this.profile_.addFuncCode(type, name, timestamp, start, size, sfiAddr, state);
     } else {
       this.profile_.addCode(type, name, timestamp, start, size);
     }
@@ -762,8 +757,8 @@ export class TickProcessor extends LogReader {
     this.profile_.addScriptSource(script, url, source);
   }
 
-  processFunctionMove(from, to) {
-    this.profile_.moveFunc(from, to);
+  processSFIMove(from, to) {
+    this.profile_.moveSharedFunctionInfo(from, to);
   }
 
   includeTick(vmState) {

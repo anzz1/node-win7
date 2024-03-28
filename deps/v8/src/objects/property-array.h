@@ -6,7 +6,6 @@
 #define V8_OBJECTS_PROPERTY_ARRAY_H_
 
 #include "src/objects/heap-object.h"
-#include "torque-generated/field-offsets.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -30,16 +29,30 @@ class PropertyArray
   inline void SetHash(int hash);
   inline int Hash() const;
 
-  inline Object get(int index) const;
-  inline Object get(PtrComprCageBase cage_base, int index) const;
+  inline Tagged<Object> get(int index) const;
+  inline Tagged<Object> get(PtrComprCageBase cage_base, int index) const;
+  inline Tagged<Object> get(int index, SeqCstAccessTag tag) const;
+  inline Tagged<Object> get(PtrComprCageBase cage_base, int index,
+                            SeqCstAccessTag tag) const;
 
-  inline void set(int index, Object value);
+  inline void set(int index, Tagged<Object> value);
+  inline void set(int index, Tagged<Object> value, SeqCstAccessTag tag);
   // Setter with explicit barrier mode.
-  inline void set(int index, Object value, WriteBarrierMode mode);
+  inline void set(int index, Tagged<Object> value, WriteBarrierMode mode);
+
+  inline Tagged<Object> Swap(int index, Tagged<Object> value,
+                             SeqCstAccessTag tag);
+  inline Tagged<Object> Swap(PtrComprCageBase cage_base, int index,
+                             Tagged<Object> value, SeqCstAccessTag tag);
+
+  inline Tagged<Object> CompareAndSwap(int index, Tagged<Object> expected,
+                                       Tagged<Object> value,
+                                       SeqCstAccessTag tag);
 
   // Signature must be in sync with FixedArray::CopyElements().
-  inline void CopyElements(Isolate* isolate, int dst_index, PropertyArray src,
-                           int src_index, int len, WriteBarrierMode mode);
+  inline void CopyElements(Isolate* isolate, int dst_index,
+                           Tagged<PropertyArray> src, int src_index, int len,
+                           WriteBarrierMode mode);
 
   // Gives access to raw memory which stores the array's data.
   inline ObjectSlot data_start();

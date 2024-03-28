@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -70,11 +70,23 @@ int ossl_ecx_key_fromdata(ECX_KEY *ecx, const OSSL_PARAM params[],
     if (param_pub_key == NULL && param_priv_key == NULL)
         return 0;
 
-    if (param_priv_key != NULL
-        && !OSSL_PARAM_get_octet_string(param_priv_key,
-                                        (void **)&ecx->privkey, ecx->keylen,
-                                        &privkeylen))
-        return 0;
+    if (param_priv_key != NULL) {
+        if (!OSSL_PARAM_get_octet_string(param_priv_key,
+                                         (void **)&ecx->privkey, ecx->keylen,
+                                         &privkeylen))
+            return 0;
+        if (privkeylen != ecx->keylen) {
+            /*
+             * Invalid key length. We will clear what we've received now. We
+             * can't leave it to ossl_ecx_key_free() because that will call
+             * OPENSSL_secure_clear_free() and assume the correct key length
+             */
+            OPENSSL_secure_clear_free(ecx->privkey, privkeylen);
+            ecx->privkey = NULL;
+            return 0;
+        }
+    }
+
 
     pubkey = ecx->pubkey;
     if (param_pub_key != NULL
@@ -83,8 +95,7 @@ int ossl_ecx_key_fromdata(ECX_KEY *ecx, const OSSL_PARAM params[],
                                          sizeof(ecx->pubkey), &pubkeylen))
         return 0;
 
-    if ((param_pub_key != NULL && pubkeylen != ecx->keylen)
-        || (param_priv_key != NULL && privkeylen != ecx->keylen))
+    if ((param_pub_key != NULL && pubkeylen != ecx->keylen))
         return 0;
 
     if (param_pub_key == NULL && !ossl_ecx_public_from_private(ecx))
@@ -111,7 +122,7 @@ ECX_KEY *ossl_ecx_key_dup(const ECX_KEY *key, int selection)
     }
 
     ret->libctx = key->libctx;
-    ret->haspubkey = key->haspubkey;
+    ret->haspubkey = 0;
     ret->keylen = key->keylen;
     ret->type = key->type;
     ret->references = 1;
@@ -122,8 +133,11 @@ ECX_KEY *ossl_ecx_key_dup(const ECX_KEY *key, int selection)
             goto err;
     }
 
-    if ((selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) != 0)
+    if ((selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) != 0
+        && key->haspubkey == 1) {
         memcpy(ret->pubkey, key->pubkey, sizeof(ret->pubkey));
+        ret->haspubkey = 1;
+    }
 
     if ((selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) != 0
         && key->privkey != NULL) {

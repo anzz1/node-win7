@@ -11,9 +11,8 @@
 
 #include "src/codegen/aligned-slot-allocator.h"
 #include "src/codegen/assembler-arch.h"
+#include "src/codegen/linkage-location.h"
 #include "src/codegen/machine-type.h"
-#include "src/codegen/signature.h"
-#include "src/wasm/value-type.h"
 
 namespace v8 {
 namespace internal {
@@ -62,15 +61,6 @@ constexpr Register kGpReturnRegisters[] = {x0, x1};
 constexpr DoubleRegister kFpParamRegisters[] = {d0, d1, d2, d3, d4, d5, d6, d7};
 constexpr DoubleRegister kFpReturnRegisters[] = {d0, d1};
 
-#elif V8_TARGET_ARCH_MIPS
-// ===========================================================================
-// == mips ===================================================================
-// ===========================================================================
-constexpr Register kGpParamRegisters[] = {a0, a2, a3};
-constexpr Register kGpReturnRegisters[] = {v0, v1};
-constexpr DoubleRegister kFpParamRegisters[] = {f2, f4, f6, f8, f10, f12, f14};
-constexpr DoubleRegister kFpReturnRegisters[] = {f2, f4};
-
 #elif V8_TARGET_ARCH_MIPS64
 // ===========================================================================
 // == mips64 =================================================================
@@ -116,16 +106,16 @@ constexpr Register kGpReturnRegisters[] = {r2, r3};
 constexpr DoubleRegister kFpParamRegisters[] = {d0, d2};
 constexpr DoubleRegister kFpReturnRegisters[] = {d0, d2};
 
-#elif V8_TARGET_ARCH_RISCV64
+#elif V8_TARGET_ARCH_RISCV32 || V8_TARGET_ARCH_RISCV64
 // ===========================================================================
 // == riscv64 =================================================================
 // ===========================================================================
 // Note that kGpParamRegisters and kFpParamRegisters are used in
-// Builtins::Generate_WasmCompileLazy (builtins-riscv64.cc)
-constexpr Register kGpParamRegisters[] = {a0, a2, a3, a4, a5, a6};
+// Builtins::Generate_WasmCompileLazy (builtins-riscv.cc)
+constexpr Register kGpParamRegisters[] = {a0, a2, a3, a4, a5, a6, a7};
 constexpr Register kGpReturnRegisters[] = {a0, a1};
 constexpr DoubleRegister kFpParamRegisters[] = {fa0, fa1, fa2, fa3,
-                                                fa4, fa5, fa6};
+                                                fa4, fa5, fa6, fa7};
 constexpr DoubleRegister kFpReturnRegisters[] = {fa0, fa1};
 
 #else
@@ -143,6 +133,8 @@ constexpr DoubleRegister kFpReturnRegisters[] = {};
 // The parameter index where the instance parameter should be placed in wasm
 // call descriptors. This is used by the Int64Lowering::LowerNode method.
 constexpr int kWasmInstanceParameterIndex = 0;
+static_assert(kWasmInstanceRegister ==
+              kGpParamRegisters[kWasmInstanceParameterIndex]);
 
 class LinkageAllocator {
  public:
@@ -259,6 +251,41 @@ class LinkageAllocator {
   AlignedSlotAllocator slot_allocator_;
 };
 
+// Helper for allocating either an GP or FP reg, or the next stack slot.
+class LinkageLocationAllocator {
+ public:
+  template <size_t kNumGpRegs, size_t kNumFpRegs>
+  constexpr LinkageLocationAllocator(const Register (&gp)[kNumGpRegs],
+                                     const DoubleRegister (&fp)[kNumFpRegs],
+                                     int slot_offset)
+      : allocator_(LinkageAllocator(gp, fp)), slot_offset_(slot_offset) {}
+
+  LinkageLocation Next(MachineRepresentation rep) {
+    MachineType type = MachineType::TypeForRepresentation(rep);
+    if (IsFloatingPoint(rep)) {
+      if (allocator_.CanAllocateFP(rep)) {
+        int reg_code = allocator_.NextFpReg(rep);
+        return LinkageLocation::ForRegister(reg_code, type);
+      }
+    } else if (allocator_.CanAllocateGP()) {
+      int reg_code = allocator_.NextGpReg();
+      return LinkageLocation::ForRegister(reg_code, type);
+    }
+    // Cannot use register; use stack slot.
+    int index = -1 - (slot_offset_ + allocator_.NextStackSlot(rep));
+    return LinkageLocation::ForCallerFrameSlot(index, type);
+  }
+
+  int NumStackSlots() const { return allocator_.NumStackSlots(); }
+  void EndSlotArea() { allocator_.EndSlotArea(); }
+
+ private:
+  LinkageAllocator allocator_;
+  // Since params and returns are in different stack frames, we must allocate
+  // them separately. Parameter slots don't need an offset, but return slots
+  // must be offset to just before the param slots, using this |slot_offset_|.
+  int slot_offset_;
+};
 }  // namespace wasm
 }  // namespace internal
 }  // namespace v8

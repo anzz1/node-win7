@@ -1,9 +1,14 @@
 {
   "case-sensitivity.any.js": {
-    "fail": "resource entry type not supported"
+    "fail": {
+      "note": "self.location is not available",
+      "expected": [
+        "getEntriesByName values are case sensitive"
+      ]
+    }
   },
-  "idlharness.any.js": {
-    "skip": "idlharness cannot recognize Node.js environment"
+  "navigation-id.helper.js": {
+    "skip": "This is not a test file."
   },
   "webtiming-resolution.any.js": {
     "skip": "flaky"

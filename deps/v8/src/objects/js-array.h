@@ -8,7 +8,6 @@
 #include "src/objects/allocation-site.h"
 #include "src/objects/fixed-array.h"
 #include "src/objects/js-objects.h"
-#include "torque-generated/field-offsets.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -26,23 +25,24 @@ namespace internal {
 class JSArray : public TorqueGeneratedJSArray<JSArray, JSObject> {
  public:
   // [length]: The length property.
-  DECL_ACCESSORS(length, Object)
-  DECL_RELAXED_GETTER(length, Object)
+  DECL_ACCESSORS(length, Tagged<Object>)
+  DECL_RELAXED_GETTER(length, Tagged<Object>)
 
   // Acquire/release semantics on this field are explicitly forbidden to avoid
   // confusion, since the default setter uses relaxed semantics. If
   // acquire/release semantics ever become necessary, the default setter should
   // be reverted to non-atomic behavior, and setters with explicit tags
   // introduced and used when required.
-  Object length(PtrComprCageBase cage_base, AcquireLoadTag tag) const = delete;
-  void set_length(Object value, ReleaseStoreTag tag,
+  Tagged<Object> length(PtrComprCageBase cage_base,
+                        AcquireLoadTag tag) const = delete;
+  void set_length(Tagged<Object> value, ReleaseStoreTag tag,
                   WriteBarrierMode mode = UPDATE_WRITE_BARRIER) = delete;
 
   // Overload the length setter to skip write barrier when the length
   // is set to a smi. This matches the set function on FixedArray.
-  inline void set_length(Smi length);
+  inline void set_length(Tagged<Smi> length);
 
-  static bool MayHaveReadOnlyLength(Map js_array_map);
+  static bool MayHaveReadOnlyLength(Tagged<Map> js_array_map);
   static bool HasReadOnlyLength(Handle<JSArray> array);
   static bool WouldChangeReadOnlyLength(Handle<JSArray> array, uint32_t index);
 
@@ -58,8 +58,6 @@ class JSArray : public TorqueGeneratedJSArray<JSArray, JSObject> {
   static inline bool SetLengthWouldNormalize(Heap* heap, uint32_t new_length);
 
   // Initializes the array to a certain length.
-  inline bool AllowsSetLength();
-
   V8_EXPORT_PRIVATE static Maybe<bool> SetLength(Handle<JSArray> array,
                                                  uint32_t length);
 
@@ -87,10 +85,14 @@ class JSArray : public TorqueGeneratedJSArray<JSArray, JSObject> {
   //      separators.
   //   2) Implicitly between two consecutive strings a single separator.
   //
+  // In addition repeated strings are represented by a negative smi, indicating
+  // how many times the previously written string has to be repeated.
+  //
   // Here are some input/output examples given the separator string is ',':
   //
   //   [1, 'hello', 2, 'world', 1] => ',hello,,world,'
   //   ['hello', 'world']          => 'hello,world'
+  //   ['hello', -2, 'world']      => 'hello,hello,hello,world'
   //
   // To avoid any allocations, this helper assumes the destination string is the
   // exact length necessary to write the strings and separators from the fixed
@@ -126,12 +128,12 @@ class JSArray : public TorqueGeneratedJSArray<JSArray, JSObject> {
   // Valid array indices range from +0 <= i < 2^32 - 1 (kMaxUInt32).
   static constexpr uint32_t kMaxArrayLength = JSObject::kMaxElementCount;
   static constexpr uint32_t kMaxArrayIndex = JSObject::kMaxElementIndex;
-  STATIC_ASSERT(kMaxArrayLength == kMaxUInt32);
-  STATIC_ASSERT(kMaxArrayIndex == kMaxUInt32 - 1);
+  static_assert(kMaxArrayLength == kMaxUInt32);
+  static_assert(kMaxArrayIndex == kMaxUInt32 - 1);
 
   // This constant is somewhat arbitrary. Any large enough value would work.
   static constexpr uint32_t kMaxFastArrayLength = 32 * 1024 * 1024;
-  STATIC_ASSERT(kMaxFastArrayLength <= kMaxArrayLength);
+  static_assert(kMaxFastArrayLength <= kMaxArrayLength);
 
   // Min. stack size for detecting an Array.prototype.join() call cycle.
   static const uint32_t kMinJoinStackSize = 2;
@@ -143,10 +145,6 @@ class JSArray : public TorqueGeneratedJSArray<JSArray, JSObject> {
 
   TQ_OBJECT_CONSTRUCTORS(JSArray)
 };
-
-Handle<Object> CacheInitialJSArrayMaps(Isolate* isolate,
-                                       Handle<Context> native_context,
-                                       Handle<Map> initial_map);
 
 // The JSArrayIterator describes JavaScript Array Iterators Objects, as
 // defined in ES section #sec-array-iterator-objects.
@@ -164,6 +162,17 @@ class JSArrayIterator
   DECL_INT_ACCESSORS(raw_kind)
 
   TQ_OBJECT_CONSTRUCTORS(JSArrayIterator)
+};
+
+// Helper class for JSArrays that are template literal objects
+class TemplateLiteralObject
+    : public TorqueGeneratedTemplateLiteralObject<TemplateLiteralObject,
+                                                  JSArray> {
+ public:
+  DECL_CAST(TemplateLiteralObject)
+
+ private:
+  TQ_OBJECT_CONSTRUCTORS(TemplateLiteralObject)
 };
 
 }  // namespace internal

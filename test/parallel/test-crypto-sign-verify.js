@@ -5,7 +5,6 @@ if (!common.hasCrypto)
 
 const assert = require('assert');
 const fs = require('fs');
-const path = require('path');
 const exec = require('child_process').exec;
 const crypto = require('crypto');
 const fixtures = require('../common/fixtures');
@@ -617,9 +616,9 @@ assert.throws(
   const tmpdir = require('../common/tmpdir');
   tmpdir.refresh();
 
-  const sigfile = path.join(tmpdir.path, 's5.sig');
+  const sigfile = tmpdir.resolve('s5.sig');
   fs.writeFileSync(sigfile, s5);
-  const msgfile = path.join(tmpdir.path, 's5.msg');
+  const msgfile = tmpdir.resolve('s5.msg');
   fs.writeFileSync(msgfile, msg);
 
   const cmd =
@@ -740,5 +739,37 @@ assert.throws(
         assert.ok(okay);
       }
     }
+  }
+}
+
+// The sign function should not swallow OpenSSL errors.
+// Regression test for https://github.com/nodejs/node/issues/40794.
+{
+  assert.throws(() => {
+    const { privateKey } = crypto.generateKeyPairSync('rsa', {
+      modulusLength: 512
+    });
+    crypto.sign('sha512', 'message', privateKey);
+  }, {
+    code: 'ERR_OSSL_RSA_DIGEST_TOO_BIG_FOR_RSA_KEY',
+    message: /digest too big for rsa key/
+  });
+}
+
+{
+  // This should not cause a crash: https://github.com/nodejs/node/issues/44471
+  for (const key of ['', 'foo', null, undefined, true, Boolean]) {
+    assert.throws(() => {
+      crypto.verify('sha256', 'foo', { key, format: 'jwk' }, Buffer.alloc(0));
+    }, { code: 'ERR_INVALID_ARG_TYPE', message: /The "key\.key" property must be of type object/ });
+    assert.throws(() => {
+      crypto.createVerify('sha256').verify({ key, format: 'jwk' }, Buffer.alloc(0));
+    }, { code: 'ERR_INVALID_ARG_TYPE', message: /The "key\.key" property must be of type object/ });
+    assert.throws(() => {
+      crypto.sign('sha256', 'foo', { key, format: 'jwk' });
+    }, { code: 'ERR_INVALID_ARG_TYPE', message: /The "key\.key" property must be of type object/ });
+    assert.throws(() => {
+      crypto.createSign('sha256').sign({ key, format: 'jwk' });
+    }, { code: 'ERR_INVALID_ARG_TYPE', message: /The "key\.key" property must be of type object/ });
   }
 }

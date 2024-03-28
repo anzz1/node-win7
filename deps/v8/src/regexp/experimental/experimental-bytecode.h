@@ -100,6 +100,8 @@ struct RegExpInstruction {
     FORK,
     JMP,
     SET_REGISTER_TO_CP,
+    BEGIN_LOOP,
+    END_LOOP,
   };
 
   struct Uc16Range {
@@ -158,10 +160,22 @@ struct RegExpInstruction {
     return result;
   }
 
-  static RegExpInstruction Assertion(RegExpAssertion::AssertionType t) {
+  static RegExpInstruction Assertion(RegExpAssertion::Type t) {
     RegExpInstruction result;
     result.opcode = ASSERTION;
     result.payload.assertion_type = t;
+    return result;
+  }
+
+  static RegExpInstruction BeginLoop() {
+    RegExpInstruction result;
+    result.opcode = BEGIN_LOOP;
+    return result;
+  }
+
+  static RegExpInstruction EndLoop() {
+    RegExpInstruction result;
+    result.opcode = END_LOOP;
     return result;
   }
 
@@ -174,11 +188,11 @@ struct RegExpInstruction {
     // Payload of SET_REGISTER_TO_CP and CLEAR_REGISTER:
     int32_t register_index;
     // Payload of ASSERTION:
-    RegExpAssertion::AssertionType assertion_type;
+    RegExpAssertion::Type assertion_type;
   } payload;
-  STATIC_ASSERT(sizeof(payload) == 4);
+  static_assert(sizeof(payload) == 4);
 };
-STATIC_ASSERT(sizeof(RegExpInstruction) == 8);
+static_assert(sizeof(RegExpInstruction) == 8);
 // TODO(mbid,v8:10765): This is rather wasteful.  We can fit the opcode in 2-3
 // bits, so the remaining 29/30 bits can be used as payload.  Problem: The
 // payload of CONSUME_RANGE consists of two 16-bit values `min` and `max`, so

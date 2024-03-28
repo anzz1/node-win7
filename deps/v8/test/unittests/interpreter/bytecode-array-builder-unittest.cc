@@ -111,7 +111,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
       feedback_spec.AddKeyedStoreICSlot(LanguageMode::kSloppy);
   FeedbackSlot strict_keyed_store_slot =
       feedback_spec.AddKeyedStoreICSlot(LanguageMode::kStrict);
-  FeedbackSlot store_own_slot = feedback_spec.AddStoreOwnICSlot();
+  FeedbackSlot define_named_own_slot = feedback_spec.AddDefineNamedOwnICSlot();
   FeedbackSlot store_array_element_slot =
       feedback_spec.AddStoreInArrayLiteralICSlot();
 
@@ -142,15 +142,17 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
   builder.LoadNamedProperty(reg, name, load_slot.ToInt())
       .LoadNamedPropertyFromSuper(reg, name, load_slot.ToInt())
       .LoadKeyedProperty(reg, keyed_load_slot.ToInt())
-      .StoreNamedProperty(reg, name, sloppy_store_slot.ToInt(),
-                          LanguageMode::kSloppy)
-      .StoreKeyedProperty(reg, reg, sloppy_keyed_store_slot.ToInt(),
-                          LanguageMode::kSloppy)
-      .StoreNamedProperty(reg, name, strict_store_slot.ToInt(),
-                          LanguageMode::kStrict)
-      .StoreKeyedProperty(reg, reg, strict_keyed_store_slot.ToInt(),
-                          LanguageMode::kStrict)
-      .StoreNamedOwnProperty(reg, name, store_own_slot.ToInt())
+      .SetNamedProperty(reg, name, sloppy_store_slot.ToInt(),
+                        LanguageMode::kSloppy)
+      .SetKeyedProperty(reg, reg, sloppy_keyed_store_slot.ToInt(),
+                        LanguageMode::kSloppy)
+      .SetNamedProperty(reg, name, strict_store_slot.ToInt(),
+                        LanguageMode::kStrict)
+      .SetKeyedProperty(reg, reg, strict_keyed_store_slot.ToInt(),
+                        LanguageMode::kStrict)
+      .DefineNamedOwnProperty(reg, name, define_named_own_slot.ToInt())
+      .DefineKeyedOwnProperty(reg, reg, DefineKeyedOwnPropertyFlag::kNoFlags,
+                              define_named_own_slot.ToInt())
       .StoreInArrayLiteral(reg, reg, store_array_element_slot.ToInt());
 
   // Emit Iterator-protocol operations
@@ -272,7 +274,8 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
       .CompareNull();
 
   // Emit conversion operator invocations.
-  builder.ToNumber(1).ToNumeric(1).ToObject(reg).ToName(reg).ToString();
+  builder.ToNumber(1).ToNumeric(1).ToObject(reg).ToName().ToString().ToBoolean(
+      ToBooleanMode::kConvertToBoolean);
 
   // Emit GetSuperConstructor.
   builder.GetSuperConstructor(reg);
@@ -315,7 +318,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
         .Bind(&after_jump10)
         .JumpIfFalse(ToBooleanMode::kAlreadyBoolean, &after_jump11)
         .Bind(&after_jump11)
-        .JumpLoop(&loop_header, 0, 0)
+        .JumpLoop(&loop_header, 0, 0, 0)
         .Bind(&after_loop);
   }
 
@@ -366,8 +369,8 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
   builder.LoadLiteral(Smi::FromInt(20000000));
   const AstRawString* wide_name = ast_factory.GetOneByteString("var_wide_name");
 
-  builder.StoreDataPropertyInLiteral(reg, reg,
-                                     DataPropertyInLiteralFlag::kNoFlags, 0);
+  builder.DefineKeyedOwnPropertyInLiteral(
+      reg, reg, DefineKeyedOwnPropertyInLiteralFlag::kNoFlags, 0);
 
   // Emit wide context operations.
   builder.LoadContextSlot(reg, 1024, 0, BytecodeArrayBuilder::kMutableSlot)
@@ -448,7 +451,8 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
   // Generate BytecodeArray.
   Handle<ScopeInfo> scope_info =
       factory->NewScopeInfo(ScopeInfo::kVariablePartIndex);
-  scope_info->set_flags(0);
+  int flags = ScopeInfo::IsEmptyBit::encode(true);
+  scope_info->set_flags(flags);
   scope_info->set_context_local_count(0);
   scope_info->set_parameter_count(0);
   scope.SetScriptScopeInfo(scope_info);
@@ -482,9 +486,9 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
   // Insert entry for illegal bytecode as this is never willingly emitted.
   scorecard[Bytecodes::ToByte(Bytecode::kIllegal)] = 1;
 
-  // Bytecode for CollectTypeProfile is only emitted when
-  // Type Information for DevTools is turned on.
-  scorecard[Bytecodes::ToByte(Bytecode::kCollectTypeProfile)] = 1;
+  // This bytecode is too inconvenient to test manually.
+  scorecard[Bytecodes::ToByte(
+      Bytecode::kFindNonDefaultConstructorOrConstruct)] = 1;
 
   // Check return occurs at the end and only once in the BytecodeArray.
   CHECK_EQ(final_bytecode, Bytecode::kReturn);
@@ -514,7 +518,7 @@ TEST_F(BytecodeArrayBuilderTest, FrameSizesLookGood) {
         builder.StoreAccumulatorInRegister(temp);
         // Ensure temporaries are used so not optimized away by the
         // register optimizer.
-        builder.ToName(temp);
+        builder.ToName().StoreAccumulatorInRegister(temp);
       }
       builder.Return();
 
@@ -569,7 +573,7 @@ TEST_F(BytecodeArrayBuilderTest, Constants) {
   ast_factory.Internalize(isolate());
   Handle<BytecodeArray> array = builder.ToBytecodeArray(isolate());
   // Should only have one entry for each identical constant.
-  EXPECT_EQ(4, array->constant_pool().length());
+  EXPECT_EQ(4, array->constant_pool()->length());
 }
 
 TEST_F(BytecodeArrayBuilderTest, ForwardJumps) {
@@ -710,14 +714,14 @@ TEST_F(BytecodeArrayBuilderTest, BackwardJumps) {
   BytecodeLoopHeader loop_header;
   builder.JumpIfNull(&after_loop)
       .Bind(&loop_header)
-      .JumpLoop(&loop_header, 0, 0)
+      .JumpLoop(&loop_header, 0, 0, 0)
       .Bind(&after_loop);
   for (int i = 0; i < 42; i++) {
-    BytecodeLabel after_loop;
+    BytecodeLabel also_after_loop;
     // Conditional jump to force the code after the JumpLoop to be live.
-    builder.JumpIfNull(&after_loop)
-        .JumpLoop(&loop_header, 0, 0)
-        .Bind(&after_loop);
+    builder.JumpIfNull(&also_after_loop)
+        .JumpLoop(&loop_header, 0, 0, 0)
+        .Bind(&also_after_loop);
   }
 
   // Add padding to force wide backwards jumps.
@@ -725,7 +729,7 @@ TEST_F(BytecodeArrayBuilderTest, BackwardJumps) {
     builder.Debugger();
   }
 
-  builder.JumpLoop(&loop_header, 0, 0);
+  builder.JumpLoop(&loop_header, 0, 0, 0);
   builder.Bind(&end);
   builder.Return();
 
@@ -744,9 +748,10 @@ TEST_F(BytecodeArrayBuilderTest, BackwardJumps) {
 
     CHECK_EQ(iterator.current_bytecode(), Bytecode::kJumpLoop);
     CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
-    // offset of 5 (because kJumpLoop takes two immediate operands and
+    // offset of 6 (because kJumpLoop takes three immediate operands and
     // JumpIfNull takes 1)
-    CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), i * 5 + 5);
+    CHECK_EQ(Bytecodes::NumberOfOperands(Bytecode::kJumpLoop), 3);
+    CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), i * 6 + 6);
     iterator.Advance();
   }
   // Check padding to force wide backwards jumps.
@@ -756,7 +761,7 @@ TEST_F(BytecodeArrayBuilderTest, BackwardJumps) {
   }
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kJumpLoop);
   CHECK_EQ(iterator.current_operand_scale(), OperandScale::kDouble);
-  CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), 42 * 5 + 256 + 4);
+  CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), 42 * 6 + 1 + 256 + 4);
   iterator.Advance();
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kReturn);
   iterator.Advance();

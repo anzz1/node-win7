@@ -179,10 +179,10 @@ function testError() {
       // The sync error, with individual property echoes
       /^Uncaught Error: ENOENT: no such file or directory, scandir '.*nonexistent\?'/,
       /Object\.readdirSync/,
-      /^  errno: -(2|4058),$/,
-      "  syscall: 'scandir',",
+      /^ {2}errno: -(2|4058),$/,
       "  code: 'ENOENT',",
-      "  path: '/nonexistent?'",
+      "  syscall: 'scandir',",
+      /^ {2}path: '*'/,
       '}',
       "'ENOENT'",
       "'scandir'",

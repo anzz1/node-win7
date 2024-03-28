@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2001-2023 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -65,6 +65,7 @@ void engine_set_all_null(ENGINE *e)
     e->load_pubkey = NULL;
     e->cmd_defns = NULL;
     e->flags = 0;
+    e->dynamic_id = NULL;
 }
 
 int engine_free_util(ENGINE *e, int not_locked)
@@ -90,6 +91,7 @@ int engine_free_util(ENGINE *e, int not_locked)
      */
     if (e->destroy)
         e->destroy(e);
+    engine_remove_dynamic_id(e, not_locked);
     CRYPTO_free_ex_data(CRYPTO_EX_INDEX_ENGINE, e, &e->ex_data);
     OPENSSL_free(e);
     return 1;
@@ -131,27 +133,34 @@ static ENGINE_CLEANUP_ITEM *int_cleanup_item(ENGINE_CLEANUP_CB *cb)
     return item;
 }
 
-void engine_cleanup_add_first(ENGINE_CLEANUP_CB *cb)
+int engine_cleanup_add_first(ENGINE_CLEANUP_CB *cb)
 {
     ENGINE_CLEANUP_ITEM *item;
 
     if (!int_cleanup_check(1))
-        return;
-    item = int_cleanup_item(cb);
-    if (item)
-        sk_ENGINE_CLEANUP_ITEM_insert(cleanup_stack, item, 0);
-}
-
-void engine_cleanup_add_last(ENGINE_CLEANUP_CB *cb)
-{
-    ENGINE_CLEANUP_ITEM *item;
-    if (!int_cleanup_check(1))
-        return;
+        return 0;
     item = int_cleanup_item(cb);
     if (item != NULL) {
-        if (sk_ENGINE_CLEANUP_ITEM_push(cleanup_stack, item) <= 0)
-            OPENSSL_free(item);
+        if (sk_ENGINE_CLEANUP_ITEM_insert(cleanup_stack, item, 0))
+            return 1;
+        OPENSSL_free(item);
     }
+    return 0;
+}
+
+int engine_cleanup_add_last(ENGINE_CLEANUP_CB *cb)
+{
+    ENGINE_CLEANUP_ITEM *item;
+
+    if (!int_cleanup_check(1))
+        return 0;
+    item = int_cleanup_item(cb);
+    if (item != NULL) {
+        if (sk_ENGINE_CLEANUP_ITEM_push(cleanup_stack, item) > 0)
+            return 1;
+        OPENSSL_free(item);
+    }
+    return 0;
 }
 
 /* The API function that performs all cleanup */

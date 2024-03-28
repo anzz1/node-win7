@@ -78,8 +78,7 @@ TEST(PageMemoryDeathTest, ConstructNonContainedRegions) {
 
 TEST(PageMemoryRegionTest, NormalPageMemoryRegion) {
   v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
-  auto pmr = std::make_unique<NormalPageMemoryRegion>(allocator, oom_handler);
+  auto pmr = NormalPageMemoryRegion::Create(allocator);
   pmr->UnprotectForTesting();
   MemoryRegion prev_overall;
   for (size_t i = 0; i < NormalPageMemoryRegion::kNumPageRegions; ++i) {
@@ -105,9 +104,7 @@ TEST(PageMemoryRegionTest, NormalPageMemoryRegion) {
 
 TEST(PageMemoryRegionTest, LargePageMemoryRegion) {
   v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
-  auto pmr =
-      std::make_unique<LargePageMemoryRegion>(allocator, oom_handler, 1024);
+  auto pmr = LargePageMemoryRegion::Create(allocator, 1024);
   pmr->UnprotectForTesting();
   const PageMemory pm = pmr->GetPageMemory();
   EXPECT_LE(1024u, pm.writeable_region().size());
@@ -115,13 +112,15 @@ TEST(PageMemoryRegionTest, LargePageMemoryRegion) {
   EXPECT_EQ(0u, pm.writeable_region().end()[-1]);
 }
 
+// See the comment in globals.h when setting |kGuardPageSize| for details.
+#if !(defined(V8_TARGET_ARCH_ARM64) && defined(V8_OS_MACOS))
 TEST(PageMemoryRegionTest, PlatformUsesGuardPages) {
   // This tests that the testing allocator actually uses protected guard
   // regions.
   v8::base::PageAllocator allocator;
 #if defined(V8_HOST_ARCH_PPC64) && !defined(_AIX)
   EXPECT_FALSE(SupportsCommittingGuardPages(allocator));
-#elif defined(V8_HOST_ARCH_ARM64)
+#elif defined(V8_HOST_ARCH_ARM64) || defined(V8_HOST_ARCH_LOONG64)
   if (allocator.CommitPageSize() == 4096) {
     EXPECT_TRUE(SupportsCommittingGuardPages(allocator));
   } else {
@@ -132,6 +131,7 @@ TEST(PageMemoryRegionTest, PlatformUsesGuardPages) {
   EXPECT_TRUE(SupportsCommittingGuardPages(allocator));
 #endif
 }
+#endif  // !(defined(V8_TARGET_ARCH_ARM64) && defined(V8_OS_MACOS))
 
 namespace {
 
@@ -144,10 +144,8 @@ TEST(PageMemoryRegionDeathTest, ReservationIsFreed) {
   // may expand to statements that re-purpose the previously freed memory
   // and thus not crash.
   EXPECT_DEATH_IF_SUPPORTED(
-      v8::base::PageAllocator allocator; FatalOutOfMemoryHandler oom_handler;
-      Address base; {
-        auto pmr = std::make_unique<LargePageMemoryRegion>(allocator,
-                                                           oom_handler, 1024);
+      v8::base::PageAllocator allocator; Address base; {
+        auto pmr = LargePageMemoryRegion::Create(allocator, 1024);
         base = pmr->reserved_region().base();
       } access(base[0]);
       , "");
@@ -155,8 +153,7 @@ TEST(PageMemoryRegionDeathTest, ReservationIsFreed) {
 
 TEST(PageMemoryRegionDeathTest, FrontGuardPageAccessCrashes) {
   v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
-  auto pmr = std::make_unique<NormalPageMemoryRegion>(allocator, oom_handler);
+  auto pmr = NormalPageMemoryRegion::Create(allocator);
   if (SupportsCommittingGuardPages(allocator)) {
     EXPECT_DEATH_IF_SUPPORTED(
         access(pmr->GetPageMemory(0).overall_region().base()[0]), "");
@@ -165,8 +162,7 @@ TEST(PageMemoryRegionDeathTest, FrontGuardPageAccessCrashes) {
 
 TEST(PageMemoryRegionDeathTest, BackGuardPageAccessCrashes) {
   v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
-  auto pmr = std::make_unique<NormalPageMemoryRegion>(allocator, oom_handler);
+  auto pmr = NormalPageMemoryRegion::Create(allocator);
   if (SupportsCommittingGuardPages(allocator)) {
     EXPECT_DEATH_IF_SUPPORTED(
         access(pmr->GetPageMemory(0).writeable_region().end()[0]), "");
@@ -175,8 +171,7 @@ TEST(PageMemoryRegionDeathTest, BackGuardPageAccessCrashes) {
 
 TEST(PageMemoryRegionTreeTest, AddNormalLookupRemove) {
   v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
-  auto pmr = std::make_unique<NormalPageMemoryRegion>(allocator, oom_handler);
+  auto pmr = NormalPageMemoryRegion::Create(allocator);
   PageMemoryRegionTree tree;
   tree.Add(pmr.get());
   ASSERT_EQ(pmr.get(), tree.Lookup(pmr->reserved_region().base()));
@@ -190,10 +185,8 @@ TEST(PageMemoryRegionTreeTest, AddNormalLookupRemove) {
 
 TEST(PageMemoryRegionTreeTest, AddLargeLookupRemove) {
   v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
   constexpr size_t kLargeSize = 5012;
-  auto pmr = std::make_unique<LargePageMemoryRegion>(allocator, oom_handler,
-                                                     kLargeSize);
+  auto pmr = LargePageMemoryRegion::Create(allocator, kLargeSize);
   PageMemoryRegionTree tree;
   tree.Add(pmr.get());
   ASSERT_EQ(pmr.get(), tree.Lookup(pmr->reserved_region().base()));
@@ -207,11 +200,9 @@ TEST(PageMemoryRegionTreeTest, AddLargeLookupRemove) {
 
 TEST(PageMemoryRegionTreeTest, AddLookupRemoveMultiple) {
   v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
-  auto pmr1 = std::make_unique<NormalPageMemoryRegion>(allocator, oom_handler);
+  auto pmr1 = NormalPageMemoryRegion::Create(allocator);
   constexpr size_t kLargeSize = 3127;
-  auto pmr2 = std::make_unique<LargePageMemoryRegion>(allocator, oom_handler,
-                                                      kLargeSize);
+  auto pmr2 = LargePageMemoryRegion::Create(allocator, kLargeSize);
   PageMemoryRegionTree tree;
   tree.Add(pmr1.get());
   tree.Add(pmr2.get());
@@ -230,59 +221,38 @@ TEST(PageMemoryRegionTreeTest, AddLookupRemoveMultiple) {
 TEST(NormalPageMemoryPool, ConstructorEmpty) {
   v8::base::PageAllocator allocator;
   NormalPageMemoryPool pool;
-  constexpr size_t kBucket = 0;
-  EXPECT_EQ(NormalPageMemoryPool::Result(nullptr, nullptr), pool.Take(kBucket));
+  EXPECT_EQ(NormalPageMemoryPool::Result(nullptr, nullptr), pool.Take());
 }
 
-TEST(NormalPageMemoryPool, AddTakeSameBucket) {
+TEST(NormalPageMemoryPool, AddTake) {
   v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
-  auto pmr = std::make_unique<NormalPageMemoryRegion>(allocator, oom_handler);
+  auto pmr = NormalPageMemoryRegion::Create(allocator);
   const PageMemory pm = pmr->GetPageMemory(0);
   NormalPageMemoryPool pool;
-  constexpr size_t kBucket = 0;
-  pool.Add(kBucket, pmr.get(), pm.writeable_region().base());
+  pool.Add(pmr.get(), pm.writeable_region().base());
   EXPECT_EQ(
       NormalPageMemoryPool::Result(pmr.get(), pm.writeable_region().base()),
-      pool.Take(kBucket));
-}
-
-TEST(NormalPageMemoryPool, AddTakeNotFoundDifferentBucket) {
-  v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
-  auto pmr = std::make_unique<NormalPageMemoryRegion>(allocator, oom_handler);
-  const PageMemory pm = pmr->GetPageMemory(0);
-  NormalPageMemoryPool pool;
-  constexpr size_t kFirstBucket = 0;
-  constexpr size_t kSecondBucket = 1;
-  pool.Add(kFirstBucket, pmr.get(), pm.writeable_region().base());
-  EXPECT_EQ(NormalPageMemoryPool::Result(nullptr, nullptr),
-            pool.Take(kSecondBucket));
-  EXPECT_EQ(
-      NormalPageMemoryPool::Result(pmr.get(), pm.writeable_region().base()),
-      pool.Take(kFirstBucket));
+      pool.Take());
 }
 
 TEST(PageBackendTest, AllocateNormalUsesPool) {
   v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
-  PageBackend backend(allocator, oom_handler);
+  PageBackend backend(allocator, allocator);
   constexpr size_t kBucket = 0;
-  Address writeable_base1 = backend.AllocateNormalPageMemory(kBucket);
+  Address writeable_base1 = backend.TryAllocateNormalPageMemory();
   EXPECT_NE(nullptr, writeable_base1);
   backend.FreeNormalPageMemory(kBucket, writeable_base1);
-  Address writeable_base2 = backend.AllocateNormalPageMemory(kBucket);
+  Address writeable_base2 = backend.TryAllocateNormalPageMemory();
   EXPECT_NE(nullptr, writeable_base2);
   EXPECT_EQ(writeable_base1, writeable_base2);
 }
 
 TEST(PageBackendTest, AllocateLarge) {
   v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
-  PageBackend backend(allocator, oom_handler);
-  Address writeable_base1 = backend.AllocateLargePageMemory(13731);
+  PageBackend backend(allocator, allocator);
+  Address writeable_base1 = backend.TryAllocateLargePageMemory(13731);
   EXPECT_NE(nullptr, writeable_base1);
-  Address writeable_base2 = backend.AllocateLargePageMemory(9478);
+  Address writeable_base2 = backend.TryAllocateLargePageMemory(9478);
   EXPECT_NE(nullptr, writeable_base2);
   EXPECT_NE(writeable_base1, writeable_base2);
   backend.FreeLargePageMemory(writeable_base1);
@@ -291,28 +261,31 @@ TEST(PageBackendTest, AllocateLarge) {
 
 TEST(PageBackendTest, LookupNormal) {
   v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
-  PageBackend backend(allocator, oom_handler);
-  constexpr size_t kBucket = 0;
-  Address writeable_base = backend.AllocateNormalPageMemory(kBucket);
-  EXPECT_EQ(nullptr, backend.Lookup(writeable_base - kGuardPageSize));
+  PageBackend backend(allocator, allocator);
+  Address writeable_base = backend.TryAllocateNormalPageMemory();
+  if (kGuardPageSize) {
+    EXPECT_EQ(nullptr, backend.Lookup(writeable_base - kGuardPageSize));
+  }
   EXPECT_EQ(nullptr, backend.Lookup(writeable_base - 1));
   EXPECT_EQ(writeable_base, backend.Lookup(writeable_base));
   EXPECT_EQ(writeable_base, backend.Lookup(writeable_base + kPageSize -
                                            2 * kGuardPageSize - 1));
   EXPECT_EQ(nullptr,
             backend.Lookup(writeable_base + kPageSize - 2 * kGuardPageSize));
-  EXPECT_EQ(nullptr,
-            backend.Lookup(writeable_base - kGuardPageSize + kPageSize - 1));
+  if (kGuardPageSize) {
+    EXPECT_EQ(nullptr,
+              backend.Lookup(writeable_base - kGuardPageSize + kPageSize - 1));
+  }
 }
 
 TEST(PageBackendTest, LookupLarge) {
   v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
-  PageBackend backend(allocator, oom_handler);
+  PageBackend backend(allocator, allocator);
   constexpr size_t kSize = 7934;
-  Address writeable_base = backend.AllocateLargePageMemory(kSize);
-  EXPECT_EQ(nullptr, backend.Lookup(writeable_base - kGuardPageSize));
+  Address writeable_base = backend.TryAllocateLargePageMemory(kSize);
+  if (kGuardPageSize) {
+    EXPECT_EQ(nullptr, backend.Lookup(writeable_base - kGuardPageSize));
+  }
   EXPECT_EQ(nullptr, backend.Lookup(writeable_base - 1));
   EXPECT_EQ(writeable_base, backend.Lookup(writeable_base));
   EXPECT_EQ(writeable_base, backend.Lookup(writeable_base + kSize - 1));
@@ -320,12 +293,10 @@ TEST(PageBackendTest, LookupLarge) {
 
 TEST(PageBackendDeathTest, DestructingBackendDestroysPageMemory) {
   v8::base::PageAllocator allocator;
-  FatalOutOfMemoryHandler oom_handler;
   Address base;
   {
-    PageBackend backend(allocator, oom_handler);
-    constexpr size_t kBucket = 0;
-    base = backend.AllocateNormalPageMemory(kBucket);
+    PageBackend backend(allocator, allocator);
+    base = backend.TryAllocateNormalPageMemory();
   }
   EXPECT_DEATH_IF_SUPPORTED(access(base[0]), "");
 }

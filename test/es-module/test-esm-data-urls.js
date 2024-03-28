@@ -1,6 +1,6 @@
-// Flags: --experimental-json-modules
 'use strict';
 const common = require('../common');
+const fixtures = require('../common/fixtures');
 const assert = require('assert');
 function createURL(mime, body) {
   return `data:${mime},${body}`;
@@ -59,36 +59,37 @@ function createBase64URL(mime, body) {
     assert.strictEqual(ns.default, plainESMURL);
   }
   {
-    const ns = await import('data:application/json;foo="test,"this"');
+    const ns = await import('data:application/json;foo="test,"this"',
+      { with: { type: 'json' } });
     assert.deepStrictEqual(Object.keys(ns), ['default']);
     assert.strictEqual(ns.default, 'this');
   }
   {
     const ns = await import(`data:application/json;foo=${
       encodeURIComponent('test,')
-    },0`);
+    },0`, { with: { type: 'json' } });
     assert.deepStrictEqual(Object.keys(ns), ['default']);
     assert.strictEqual(ns.default, 0);
   }
   {
-    await assert.rejects(async () => {
-      return import('data:application/json;foo="test,",0');
-    }, {
+    await assert.rejects(async () =>
+      import('data:application/json;foo="test,",0',
+        { with: { type: 'json' } }), {
       name: 'SyntaxError',
-      message: /Unexpected end of JSON input/
+      message: /Unterminated string in JSON at position 3/
     });
   }
   {
     const body = '{"x": 1}';
     const plainESMURL = createURL('application/json', body);
-    const ns = await import(plainESMURL);
+    const ns = await import(plainESMURL, { with: { type: 'json' } });
     assert.deepStrictEqual(Object.keys(ns), ['default']);
     assert.strictEqual(ns.default.x, 1);
   }
   {
     const body = '{"default": 2}';
     const plainESMURL = createURL('application/json', body);
-    const ns = await import(plainESMURL);
+    const ns = await import(plainESMURL, { with: { type: 'json' } });
     assert.deepStrictEqual(Object.keys(ns), ['default']);
     assert.strictEqual(ns.default.default, 2);
   }
@@ -106,5 +107,9 @@ function createBase64URL(mime, body) {
     const plainESMURL = 'data:text/javascript,export%20default%202';
     const module = await import(plainESMURL);
     assert.strictEqual(module.default, 2);
+  }
+  {
+    const plainESMURL = `data:text/javascript,${encodeURIComponent(`import ${JSON.stringify(fixtures.fileURL('es-module-url', 'empty.js'))}`)}`;
+    await import(plainESMURL);
   }
 })().then(common.mustCall());

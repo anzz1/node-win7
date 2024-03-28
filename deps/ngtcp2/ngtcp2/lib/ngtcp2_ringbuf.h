@@ -37,9 +37,9 @@ typedef struct ngtcp2_ringbuf {
   /* buf points to the underlying buffer. */
   uint8_t *buf;
   const ngtcp2_mem *mem;
-  /* nmemb is the number of elements that can be stored in this ring
-     buffer. */
-  size_t nmemb;
+  /* mask is the bit mask to cover all bits for the maximum number of
+     elements.  The maximum number of elements is mask + 1. */
+  size_t mask;
   /* size is the size of each element. */
   size_t size;
   /* first is the offset to the first element. */
@@ -61,6 +61,13 @@ typedef struct ngtcp2_ringbuf {
  */
 int ngtcp2_ringbuf_init(ngtcp2_ringbuf *rb, size_t nmemb, size_t size,
                         const ngtcp2_mem *mem);
+
+/*
+ * ngtcp2_ringbuf_buf_init initializes |rb| with given buffer and
+ * size.
+ */
+void ngtcp2_ringbuf_buf_init(ngtcp2_ringbuf *rb, size_t nmemb, size_t size,
+                             uint8_t *buf, const ngtcp2_mem *mem);
 
 /*
  * ngtcp2_ringbuf_free frees resources allocated for |rb|.  This
@@ -106,5 +113,20 @@ void *ngtcp2_ringbuf_get(ngtcp2_ringbuf *rb, size_t offset);
 
 /* ngtcp2_ringbuf_full returns nonzero if |rb| is full. */
 int ngtcp2_ringbuf_full(ngtcp2_ringbuf *rb);
+
+/* ngtcp2_static_ringbuf_def defines ngtcp2_ringbuf struct wrapper
+   which uses a statically allocated buffer that is suitable for a
+   usage that does not change buffer size with ngtcp2_ringbuf_resize.
+   ngtcp2_ringbuf_free should never be called for rb field. */
+#define ngtcp2_static_ringbuf_def(NAME, NMEMB, SIZE)                           \
+  typedef struct ngtcp2_static_ringbuf_##NAME {                                \
+    ngtcp2_ringbuf rb;                                                         \
+    uint8_t buf[(NMEMB) * (SIZE)];                                             \
+  } ngtcp2_static_ringbuf_##NAME;                                              \
+                                                                               \
+  static inline void ngtcp2_static_ringbuf_##NAME##_init(                      \
+      ngtcp2_static_ringbuf_##NAME *srb) {                                     \
+    ngtcp2_ringbuf_buf_init(&srb->rb, (NMEMB), (SIZE), srb->buf, NULL);        \
+  }
 
 #endif /* NGTCP2_RINGBUF_H */

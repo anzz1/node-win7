@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const os = require('os');
+const { isIP } = require('net');
 
 const types = {
   A: 1,
@@ -13,11 +14,11 @@ const types = {
   MX: 15,
   TXT: 16,
   ANY: 255,
-  CAA: 257
+  CAA: 257,
 };
 
 const classes = {
-  IN: 1
+  IN: 1,
 };
 
 // Naïve DNS parser/serializer.
@@ -34,7 +35,7 @@ function readDomainFromPacket(buffer, offset) {
     const { nread, domain } = readDomainFromPacket(buffer, offset + length);
     return {
       nread: 1 + length + nread,
-      domain: domain ? `${chunk}.${domain}` : chunk
+      domain: domain ? `${chunk}.${domain}` : chunk,
     };
   }
   // Pointer to another part of the packet.
@@ -43,7 +44,7 @@ function readDomainFromPacket(buffer, offset) {
   const pointeeOffset = buffer.readUInt16BE(offset) &~ 0xC000;
   return {
     nread: 2,
-    domain: readDomainFromPacket(buffer, pointeeOffset)
+    domain: readDomainFromPacket(buffer, pointeeOffset),
   };
 }
 
@@ -236,7 +237,7 @@ function writeDNSPacket(parsed) {
         rdLengthBuf[0] = 16;
         buffers.push(writeIPv6(rr.address));
         break;
-      case 'TXT':
+      case 'TXT': {
         const total = rr.entries.map((s) => s.length).reduce((a, b) => a + b);
         // Total length of all strings + 1 byte each for their lengths.
         rdLengthBuf[0] = rr.entries.length + total;
@@ -245,6 +246,7 @@ function writeDNSPacket(parsed) {
           buffers.push(Buffer.from(txt));
         }
         break;
+      }
       case 'MX':
         rdLengthBuf[0] = 2;
         buffers.push(new Uint16Array([rr.priority]));
@@ -308,6 +310,25 @@ function errorLookupMock(code = mockedErrorCode, syscall = mockedSysCall) {
   };
 }
 
+function createMockedLookup(...addresses) {
+  addresses = addresses.map((address) => ({ address: address, family: isIP(address) }));
+
+  // Create a DNS server which replies with a AAAA and a A record for the same host
+  return function lookup(hostname, options, cb) {
+    if (options.all === true) {
+      process.nextTick(() => {
+        cb(null, addresses);
+      });
+
+      return;
+    }
+
+    process.nextTick(() => {
+      cb(null, addresses[0].address, addresses[0].family);
+    });
+  };
+}
+
 module.exports = {
   types,
   classes,
@@ -315,5 +336,6 @@ module.exports = {
   parseDNSPacket,
   errorLookupMock,
   mockedErrorCode,
-  mockedSysCall
+  mockedSysCall,
+  createMockedLookup,
 };

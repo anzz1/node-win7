@@ -209,7 +209,10 @@ const errorTests = [
   // should throw
   {
     send: 'JSON.parse(\'{invalid: \\\'json\\\'}\');',
-    expect: [/^Uncaught SyntaxError: /]
+    expect: [
+      'Uncaught:',
+      /^SyntaxError: /,
+    ],
   },
   // End of input to JSON.parse error is special case of syntax error,
   // should throw
@@ -220,7 +223,10 @@ const errorTests = [
   // should throw
   {
     send: 'JSON.parse(\'{\');',
-    expect: [/^Uncaught SyntaxError: /]
+    expect: [
+      'Uncaught:',
+      /^SyntaxError: /,
+    ],
   },
   // invalid RegExps are a special case of syntax error,
   // should throw
@@ -571,10 +577,10 @@ const errorTests = [
       /^Uncaught Error: Cannot find module 'internal\/repl'/,
       /^Require stack:/,
       /^- <repl>/,
-      /^    at .*/,
-      /^    at .*/,
-      /^    at .*/,
-      /^    at .*/,
+      /^ {4}at .*/,
+      /^ {4}at .*/,
+      /^ {4}at .*/,
+      /^ {4}at .*/,
       "  code: 'MODULE_NOT_FOUND',",
       "  requireStack: [ '<repl>' ]",
       '}',
@@ -776,17 +782,18 @@ const errorTests = [
       '  group: [Function: group],',
       '  groupEnd: [Function: groupEnd],',
       '  table: [Function: table],',
-      /  debug: \[Function: (debug|log)],/,
-      /  info: \[Function: (info|log)],/,
-      /  dirxml: \[Function: (dirxml|log)],/,
-      /  error: \[Function: (error|warn)],/,
-      /  groupCollapsed: \[Function: (groupCollapsed|group)],/,
-      /  Console: \[Function: Console],?/,
+      / {2}debug: \[Function: (debug|log)],/,
+      / {2}info: \[Function: (info|log)],/,
+      / {2}dirxml: \[Function: (dirxml|log)],/,
+      / {2}error: \[Function: (error|warn)],/,
+      / {2}groupCollapsed: \[Function: (groupCollapsed|group)],/,
+      / {2}Console: \[Function: Console],?/,
       ...process.features.inspector ? [
         '  profile: [Function: profile],',
         '  profileEnd: [Function: profileEnd],',
         '  timeStamp: [Function: timeStamp],',
-        '  context: [Function: context]',
+        '  context: [Function: context],',
+        '  createTask: [Function: createTask]',
       ] : [],
       '}',
     ]
@@ -817,7 +824,74 @@ const tcpTests = [
       kArrow,
       '',
       'Uncaught:',
-      /^SyntaxError: .* dynamic import/,
+      'SyntaxError: Cannot use import statement inside the Node.js REPL, \
+alternatively use dynamic import: const { default: comeOn } = await import("fhqwhgads");',
+    ]
+  },
+  {
+    send: 'import { export1, export2 } from "module-name"',
+    expect: [
+      kSource,
+      kArrow,
+      '',
+      'Uncaught:',
+      'SyntaxError: Cannot use import statement inside the Node.js REPL, \
+alternatively use dynamic import: const { export1, export2 } = await import("module-name");',
+    ]
+  },
+  {
+    send: 'import * as name from "module-name";',
+    expect: [
+      kSource,
+      kArrow,
+      '',
+      'Uncaught:',
+      'SyntaxError: Cannot use import statement inside the Node.js REPL, \
+alternatively use dynamic import: const name = await import("module-name");',
+    ]
+  },
+  {
+    send: 'import "module-name";',
+    expect: [
+      kSource,
+      kArrow,
+      '',
+      'Uncaught:',
+      'SyntaxError: Cannot use import statement inside the Node.js REPL, \
+alternatively use dynamic import: await import("module-name");',
+    ]
+  },
+  {
+    send: 'import { export1 as localName1, export2 } from "bar";',
+    expect: [
+      kSource,
+      kArrow,
+      '',
+      'Uncaught:',
+      'SyntaxError: Cannot use import statement inside the Node.js REPL, \
+alternatively use dynamic import: const { export1: localName1, export2 } = await import("bar");',
+    ]
+  },
+  {
+    send: 'import alias from "bar";',
+    expect: [
+      kSource,
+      kArrow,
+      '',
+      'Uncaught:',
+      'SyntaxError: Cannot use import statement inside the Node.js REPL, \
+alternatively use dynamic import: const { default: alias } = await import("bar");',
+    ]
+  },
+  {
+    send: 'import alias, {namedExport} from "bar";',
+    expect: [
+      kSource,
+      kArrow,
+      '',
+      'Uncaught:',
+      'SyntaxError: Cannot use import statement inside the Node.js REPL, \
+alternatively use dynamic import: const { default: alias, namedExport } = await import("bar");',
     ]
   },
 ];
@@ -840,7 +914,8 @@ const tcpTests = [
 
     socket.end();
   }
-  common.allowGlobals(...Object.values(global));
+  common.allowGlobals(global.invoke_me, global.message, global.a, global.blah,
+                      global.I, global.f, global.path, global.x, global.name, global.foo);
 })().then(common.mustCall());
 
 function startTCPRepl() {

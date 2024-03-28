@@ -1,7 +1,6 @@
 #include "crypto/crypto_random.h"
-#include "crypto/crypto_util.h"
-#include "allocated_buffer-inl.h"
 #include "async_wrap-inl.h"
+#include "crypto/crypto_util.h"
 #include "env-inl.h"
 #include "memory_tracker-inl.h"
 #include "threadpoolwork-inl.h"
@@ -14,14 +13,14 @@ namespace node {
 
 using v8::ArrayBuffer;
 using v8::BackingStore;
-using v8::False;
+using v8::Boolean;
 using v8::FunctionCallbackInfo;
+using v8::Int32;
 using v8::Just;
 using v8::Local;
 using v8::Maybe;
 using v8::Nothing;
 using v8::Object;
-using v8::True;
 using v8::Uint32;
 using v8::Value;
 
@@ -40,8 +39,7 @@ Maybe<bool> RandomBytesTraits::AdditionalConfig(
     const FunctionCallbackInfo<Value>& args,
     unsigned int offset,
     RandomBytesConfig* params) {
-  Environment* env = Environment::GetCurrent(args);
-  CHECK(IsAnyByteSource(args[offset]));  // Buffer to fill
+  CHECK(IsAnyBufferSource(args[offset]));  // Buffer to fill
   CHECK(args[offset + 1]->IsUint32());  // Offset
   CHECK(args[offset + 2]->IsUint32());  // Size
 
@@ -51,11 +49,6 @@ Maybe<bool> RandomBytesTraits::AdditionalConfig(
   const uint32_t size = args[offset + 2].As<Uint32>()->Value();
   CHECK_GE(byte_offset + size, byte_offset);  // Overflow check.
   CHECK_LE(byte_offset + size, in.size());  // Bounds check.
-
-  if (UNLIKELY(size > INT_MAX)) {
-    THROW_ERR_OUT_OF_RANGE(env, "buffer is too large");
-    return Nothing<bool>();
-  }
 
   params->buffer = in.data() + byte_offset;
   params->size = size;
@@ -67,8 +60,7 @@ bool RandomBytesTraits::DeriveBits(
     Environment* env,
     const RandomBytesConfig& params,
     ByteSource* unused) {
-  CheckEntropy();  // Ensure that OpenSSL's PRNG is properly seeded.
-  return RAND_bytes(params.buffer, params.size) != 0;
+  return CSPRNG(params.buffer, params.size).is_ok();
 }
 
 void RandomPrimeConfig::MemoryInfo(MemoryTracker* tracker) const {
@@ -83,10 +75,10 @@ Maybe<bool> RandomPrimeTraits::EncodeOutput(
   size_t size = BN_num_bytes(params.prime.get());
   std::shared_ptr<BackingStore> store =
       ArrayBuffer::NewBackingStore(env->isolate(), size);
-  BN_bn2binpad(
-      params.prime.get(),
-      reinterpret_cast<unsigned char*>(store->Data()),
-      size);
+  CHECK_EQ(static_cast<int>(size),
+           BN_bn2binpad(params.prime.get(),
+                        reinterpret_cast<unsigned char*>(store->Data()),
+                        size));
   *result = ArrayBuffer::New(env->isolate(), store);
   return Just(true);
 }
@@ -122,11 +114,9 @@ Maybe<bool> RandomPrimeTraits::AdditionalConfig(
     }
   }
 
+  // The JS interface already ensures that the (positive) size fits into an int.
   int bits = static_cast<int>(size);
-  if (bits < 0) {
-    THROW_ERR_OUT_OF_RANGE(env, "invalid size");
-    return Nothing<bool>();
-  }
+  CHECK_GT(bits, 0);
 
   if (params->add) {
     if (BN_num_bits(params->add.get()) > bits) {
@@ -159,12 +149,12 @@ Maybe<bool> RandomPrimeTraits::AdditionalConfig(
   return Just(true);
 }
 
-bool RandomPrimeTraits::DeriveBits(
-    Environment* env,
-    const RandomPrimeConfig& params,
-    ByteSource* unused) {
-
-  CheckEntropy();
+bool RandomPrimeTraits::DeriveBits(Environment* env,
+                                   const RandomPrimeConfig& params,
+                                   ByteSource* unused) {
+  // BN_generate_prime_ex() calls RAND_bytes_ex() internally.
+  // Make sure the CSPRNG is properly seeded.
+  CHECK(CSPRNG(nullptr, 0).is_ok());
 
   if (BN_generate_prime_ex(
           params.prime.get(),
@@ -189,8 +179,6 @@ Maybe<bool> CheckPrimeTraits::AdditionalConfig(
     const FunctionCallbackInfo<Value>& args,
     unsigned int offset,
     CheckPrimeConfig* params) {
-  Environment* env = Environment::GetCurrent(args);
-
   ArrayBufferOrViewContents<unsigned char> candidate(args[offset]);
 
   params->candidate =
@@ -199,15 +187,9 @@ Maybe<bool> CheckPrimeTraits::AdditionalConfig(
           candidate.size(),
           nullptr));
 
-  CHECK(args[offset + 1]->IsUint32());  // Checks
-
-  const int checks = static_cast<int>(args[offset + 1].As<Uint32>()->Value());
-  if (checks < 0) {
-    THROW_ERR_OUT_OF_RANGE(env, "invalid options.checks");
-    return Nothing<bool>();
-  }
-
-  params->checks = checks;
+  CHECK(args[offset + 1]->IsInt32());  // Checks
+  params->checks = args[offset + 1].As<Int32>()->Value();
+  CHECK_GE(params->checks, 0);
 
   return Just(true);
 }
@@ -225,9 +207,9 @@ bool CheckPrimeTraits::DeriveBits(
             ctx.get(),
             nullptr);
   if (ret < 0) return false;
-  char* data = MallocOpenSSL<char>(1);
-  data[0] = ret;
-  *out = ByteSource::Allocated(data, 1);
+  ByteSource::Builder buf(1);
+  buf.data<char>()[0] = ret;
+  *out = std::move(buf).release();
   return true;
 }
 
@@ -236,7 +218,7 @@ Maybe<bool> CheckPrimeTraits::EncodeOutput(
     const CheckPrimeConfig& params,
     ByteSource* out,
     v8::Local<v8::Value>* result) {
-  *result = out->get()[0] ? True(env->isolate()) : False(env->isolate());
+  *result = Boolean::New(env->isolate(), out->data<char>()[0] != 0);
   return Just(true);
 }
 

@@ -24,6 +24,7 @@
 #include "src/execution/isolate-inl.h"
 #include "src/heap/factory.h"
 #include "src/heap/heap-write-barrier-inl.h"
+#include "src/heap/heap.h"
 #include "src/numbers/conversions.h"
 #include "src/objects/heap-number-inl.h"
 #include "src/objects/instance-type-inl.h"
@@ -48,7 +49,7 @@ class MutableBigInt : public FreshlyAllocatedBigInt {
   template <typename Isolate = v8::internal::Isolate>
   static Handle<BigInt> MakeImmutable(Handle<MutableBigInt> result);
 
-  static void Canonicalize(MutableBigInt result);
+  static void Canonicalize(Tagged<MutableBigInt> result);
 
   // Allocation helpers.
   template <typename IsolateT>
@@ -57,7 +58,7 @@ class MutableBigInt : public FreshlyAllocatedBigInt {
       AllocationType allocation = AllocationType::kYoung);
   static Handle<BigInt> NewFromInt(Isolate* isolate, int value);
   static Handle<BigInt> NewFromDouble(Isolate* isolate, double value);
-  void InitializeDigits(int length, byte value = 0);
+  void InitializeDigits(int length, uint8_t value = 0);
   static Handle<MutableBigInt> Copy(Isolate* isolate,
                                     Handle<BigIntBase> source);
   template <typename IsolateT>
@@ -69,62 +70,23 @@ class MutableBigInt : public FreshlyAllocatedBigInt {
   }
 
   static Handle<MutableBigInt> Cast(Handle<FreshlyAllocatedBigInt> bigint) {
-    SLOW_DCHECK(bigint->IsBigInt());
+    SLOW_DCHECK(IsBigInt(*bigint));
     return Handle<MutableBigInt>::cast(bigint);
   }
-  static MutableBigInt cast(Object o) {
-    SLOW_DCHECK(o.IsBigInt());
+  static Tagged<MutableBigInt> cast(Tagged<Object> o) {
+    SLOW_DCHECK(IsBigInt(o));
     return MutableBigInt(o.ptr());
   }
-  static MutableBigInt unchecked_cast(Object o) {
+  static Tagged<MutableBigInt> unchecked_cast(Tagged<Object> o) {
     return MutableBigInt(o.ptr());
   }
 
   // Internal helpers.
-  static MaybeHandle<MutableBigInt> BitwiseAnd(Isolate* isolate,
-                                               Handle<BigInt> x,
-                                               Handle<BigInt> y);
-  static MaybeHandle<MutableBigInt> BitwiseXor(Isolate* isolate,
-                                               Handle<BigInt> x,
-                                               Handle<BigInt> y);
-  static MaybeHandle<MutableBigInt> BitwiseOr(Isolate* isolate,
-                                              Handle<BigInt> x,
-                                              Handle<BigInt> y);
-
-  static Handle<BigInt> TruncateToNBits(Isolate* isolate, int n,
-                                        Handle<BigInt> x);
-  static Handle<BigInt> TruncateAndSubFromPowerOfTwo(Isolate* isolate, int n,
-                                                     Handle<BigInt> x,
-                                                     bool result_sign);
-
   static MaybeHandle<MutableBigInt> AbsoluteAddOne(
       Isolate* isolate, Handle<BigIntBase> x, bool sign,
-      MutableBigInt result_storage = MutableBigInt());
+      Tagged<MutableBigInt> result_storage = MutableBigInt());
   static Handle<MutableBigInt> AbsoluteSubOne(Isolate* isolate,
                                               Handle<BigIntBase> x);
-  static MaybeHandle<MutableBigInt> AbsoluteSubOne(Isolate* isolate,
-                                                   Handle<BigIntBase> x,
-                                                   int result_length);
-
-  enum ExtraDigitsHandling { kCopy, kSkip };
-  enum SymmetricOp { kSymmetric, kNotSymmetric };
-  static inline Handle<MutableBigInt> AbsoluteBitwiseOp(
-      Isolate* isolate, Handle<BigIntBase> x, Handle<BigIntBase> y,
-      MutableBigInt result_storage, ExtraDigitsHandling extra_digits,
-      SymmetricOp symmetric,
-      const std::function<digit_t(digit_t, digit_t)>& op);
-  static Handle<MutableBigInt> AbsoluteAnd(
-      Isolate* isolate, Handle<BigIntBase> x, Handle<BigIntBase> y,
-      MutableBigInt result_storage = MutableBigInt());
-  static Handle<MutableBigInt> AbsoluteAndNot(
-      Isolate* isolate, Handle<BigIntBase> x, Handle<BigIntBase> y,
-      MutableBigInt result_storage = MutableBigInt());
-  static Handle<MutableBigInt> AbsoluteOr(
-      Isolate* isolate, Handle<BigIntBase> x, Handle<BigIntBase> y,
-      MutableBigInt result_storage = MutableBigInt());
-  static Handle<MutableBigInt> AbsoluteXor(
-      Isolate* isolate, Handle<BigIntBase> x, Handle<BigIntBase> y,
-      MutableBigInt result_storage = MutableBigInt());
 
   // Specialized helpers for shift operations.
   static MaybeHandle<BigInt> LeftShiftByAbsolute(Isolate* isolate,
@@ -143,11 +105,8 @@ class MutableBigInt : public FreshlyAllocatedBigInt {
 
   // Returns the least significant 64 bits, simulating two's complement
   // representation.
-  static uint64_t GetRawBits(BigIntBase x, bool* lossless);
+  static uint64_t GetRawBits(Tagged<BigIntBase> x, bool* lossless);
 
-  // Digit arithmetic helpers.
-  static inline digit_t digit_add(digit_t a, digit_t b, digit_t* carry);
-  static inline digit_t digit_sub(digit_t a, digit_t b, digit_t* borrow);
   static inline bool digit_ismax(digit_t x) {
     return static_cast<digit_t>(~x) == 0;
   }
@@ -175,7 +134,7 @@ class MutableBigInt : public FreshlyAllocatedBigInt {
 
   void set_64_bits(uint64_t bits);
 
-  bool IsMutableBigInt() const { return IsBigInt(); }
+  static bool IsMutableBigInt(Tagged<MutableBigInt> o) { return IsBigInt(o); }
 
   static_assert(std::is_same<bigint::digit_t, BigIntBase::digit_t>::value,
                 "We must be able to call BigInt library functions");
@@ -188,24 +147,23 @@ class MutableBigInt : public FreshlyAllocatedBigInt {
 OBJECT_CONSTRUCTORS_IMPL(MutableBigInt, FreshlyAllocatedBigInt)
 NEVER_READ_ONLY_SPACE_IMPL(MutableBigInt)
 
-#include "src/base/platform/wrappers.h"
 #include "src/objects/object-macros-undef.h"
 
-bigint::Digits GetDigits(BigIntBase bigint) {
+bigint::Digits GetDigits(Tagged<BigIntBase> bigint) {
   return bigint::Digits(
       reinterpret_cast<bigint::digit_t*>(
           bigint.ptr() + BigIntBase::kDigitsOffset - kHeapObjectTag),
-      bigint.length());
+      bigint->length());
 }
 bigint::Digits GetDigits(Handle<BigIntBase> bigint) {
   return GetDigits(*bigint);
 }
 
-bigint::RWDigits GetRWDigits(MutableBigInt bigint) {
+bigint::RWDigits GetRWDigits(Tagged<MutableBigInt> bigint) {
   return bigint::RWDigits(
       reinterpret_cast<bigint::digit_t*>(
           bigint.ptr() + BigIntBase::kDigitsOffset - kHeapObjectTag),
-      bigint.length());
+      bigint->length());
 }
 bigint::RWDigits GetRWDigits(Handle<MutableBigInt> bigint) {
   return GetRWDigits(*bigint);
@@ -219,7 +177,7 @@ MaybeHandle<T> ThrowBigIntTooBig(Isolate* isolate) {
   // RangeError from being thrown. As this is a performance optimization, this
   // behavior is accepted. To prevent the correctness fuzzer from detecting this
   // difference, we crash the program.
-  if (FLAG_correctness_fuzzer_suppressions) {
+  if (v8_flags.correctness_fuzzer_suppressions) {
     FATAL("Aborting on invalid BigInt length");
   }
   THROW_NEW_ERROR(isolate, NewRangeError(MessageTemplate::kBigIntTooBig), T);
@@ -249,7 +207,7 @@ Handle<BigInt> MutableBigInt::NewFromInt(Isolate* isolate, int value) {
     result->set_digit(0, value);
   } else {
     if (value == kMinInt) {
-      STATIC_ASSERT(kMinInt == -kMaxInt - 1);
+      static_assert(kMinInt == -kMaxInt - 1);
       result->set_digit(0, static_cast<BigInt::digit_t>(kMaxInt) + 1);
     } else {
       result->set_digit(0, -value);
@@ -263,7 +221,7 @@ Handle<BigInt> MutableBigInt::NewFromDouble(Isolate* isolate, double value) {
   if (value == 0) return Zero(isolate);
 
   bool sign = value < 0;  // -0 was already handled above.
-  uint64_t double_bits = bit_cast<uint64_t>(value);
+  uint64_t double_bits = base::bit_cast<uint64_t>(value);
   int raw_exponent =
       static_cast<int>(double_bits >> base::Double::kPhysicalSignificandSize) &
       0x7FF;
@@ -337,7 +295,7 @@ Handle<MutableBigInt> MutableBigInt::Copy(Isolate* isolate,
   return result;
 }
 
-void MutableBigInt::InitializeDigits(int length, byte value) {
+void MutableBigInt::InitializeDigits(int length, uint8_t value) {
   memset(reinterpret_cast<void*>(ptr() + kDigitsOffset - kHeapObjectTag), value,
          length * kDigitSize);
 }
@@ -355,32 +313,32 @@ Handle<BigInt> MutableBigInt::MakeImmutable(Handle<MutableBigInt> result) {
   return Handle<BigInt>::cast(result);
 }
 
-void MutableBigInt::Canonicalize(MutableBigInt result) {
+void MutableBigInt::Canonicalize(Tagged<MutableBigInt> result) {
   // Check if we need to right-trim any leading zero-digits.
-  int old_length = result.length();
+  int old_length = result->length();
   int new_length = old_length;
-  while (new_length > 0 && result.digit(new_length - 1) == 0) new_length--;
+  while (new_length > 0 && result->digit(new_length - 1) == 0) new_length--;
   int to_trim = old_length - new_length;
   if (to_trim != 0) {
-    int size_delta = to_trim * MutableBigInt::kDigitSize;
-    Address new_end = result.address() + BigInt::SizeFor(new_length);
-    Heap* heap = result.GetHeap();
+    Heap* heap = result->GetHeap();
     if (!heap->IsLargeObject(result)) {
-      // We do not create a filler for objects in large object space.
-      // TODO(hpayer): We should shrink the large object page if the size
-      // of the object changed significantly.
-      heap->CreateFillerObjectAt(new_end, size_delta, ClearRecordedSlots::kNo);
+      int old_size = ALIGN_TO_ALLOCATION_ALIGNMENT(BigInt::SizeFor(old_length));
+      int new_size = ALIGN_TO_ALLOCATION_ALIGNMENT(BigInt::SizeFor(new_length));
+      heap->NotifyObjectSizeChange(result, old_size, new_size,
+                                   ClearRecordedSlots::kNo);
     }
-    result.set_length(new_length, kReleaseStore);
+    result->set_length(new_length, kReleaseStore);
 
     // Canonicalize -0n.
     if (new_length == 0) {
-      result.set_sign(false);
+      result->set_sign(false);
       // TODO(jkummerow): If we cache a canonical 0n, return that here.
     }
   }
-  DCHECK_IMPLIES(result.length() > 0,
-                 result.digit(result.length() - 1) != 0);  // MSD is non-zero.
+  DCHECK_IMPLIES(result->length() > 0,
+                 result->digit(result->length() - 1) != 0);  // MSD is non-zero.
+  // Callers that don't require trimming must ensure this themselves.
+  DCHECK_IMPLIES(result->length() == 0, result->sign() == false);
 }
 
 template <typename IsolateT>
@@ -406,7 +364,7 @@ MaybeHandle<BigInt> BigInt::BitwiseNot(Isolate* isolate, Handle<BigInt> x) {
   MaybeHandle<MutableBigInt> result;
   if (x->sign()) {
     // ~(-x) == ~(~(x-1)) == x-1
-    result = MutableBigInt::AbsoluteSubOne(isolate, x, x->length());
+    result = MutableBigInt::AbsoluteSubOne(isolate, x);
   } else {
     // ~x == -x-1 == -(x+1)
     result = MutableBigInt::AbsoluteAddOne(isolate, x, true);
@@ -418,8 +376,7 @@ MaybeHandle<BigInt> BigInt::Exponentiate(Isolate* isolate, Handle<BigInt> base,
                                          Handle<BigInt> exponent) {
   // 1. If exponent is < 0, throw a RangeError exception.
   if (exponent->sign()) {
-    THROW_NEW_ERROR(isolate,
-                    NewRangeError(MessageTemplate::kBigIntNegativeExponent),
+    THROW_NEW_ERROR(isolate, NewRangeError(MessageTemplate::kMustBePositive),
                     BigInt);
   }
   // 2. If base is 0n and exponent is 0n, return 1n.
@@ -439,7 +396,7 @@ MaybeHandle<BigInt> BigInt::Exponentiate(Isolate* isolate, Handle<BigInt> base,
   }
   // For all bases >= 2, very large exponents would lead to unrepresentable
   // results.
-  STATIC_ASSERT(kMaxLengthBits < std::numeric_limits<digit_t>::max());
+  static_assert(kMaxLengthBits < std::numeric_limits<digit_t>::max());
   if (exponent->length() > 1) {
     return ThrowBigIntTooBig<BigInt>(isolate);
   }
@@ -448,7 +405,7 @@ MaybeHandle<BigInt> BigInt::Exponentiate(Isolate* isolate, Handle<BigInt> base,
   if (exp_value >= kMaxLengthBits) {
     return ThrowBigIntTooBig<BigInt>(isolate);
   }
-  STATIC_ASSERT(kMaxLengthBits <= kMaxInt);
+  static_assert(kMaxLengthBits <= kMaxInt);
   int n = static_cast<int>(exp_value);
   if (base->length() == 1 && base->digit(0) == 2) {
     // Fast path for 2^n.
@@ -662,107 +619,93 @@ ComparisonResult BigInt::CompareToBigInt(Handle<BigInt> x, Handle<BigInt> y) {
   return ComparisonResult::kEqual;
 }
 
-bool BigInt::EqualToBigInt(BigInt x, BigInt y) {
-  if (x.sign() != y.sign()) return false;
-  if (x.length() != y.length()) return false;
-  for (int i = 0; i < x.length(); i++) {
-    if (x.digit(i) != y.digit(i)) return false;
+bool BigInt::EqualToBigInt(Tagged<BigInt> x, Tagged<BigInt> y) {
+  if (x->sign() != y->sign()) return false;
+  if (x->length() != y->length()) return false;
+  for (int i = 0; i < x->length(); i++) {
+    if (x->digit(i) != y->digit(i)) return false;
   }
   return true;
 }
 
 MaybeHandle<BigInt> BigInt::BitwiseAnd(Isolate* isolate, Handle<BigInt> x,
                                        Handle<BigInt> y) {
-  return MutableBigInt::MakeImmutable(MutableBigInt::BitwiseAnd(isolate, x, y));
-}
-
-MaybeHandle<MutableBigInt> MutableBigInt::BitwiseAnd(Isolate* isolate,
-                                                     Handle<BigInt> x,
-                                                     Handle<BigInt> y) {
-  if (!x->sign() && !y->sign()) {
-    return AbsoluteAnd(isolate, x, y);
-  } else if (x->sign() && y->sign()) {
-    int result_length = std::max(x->length(), y->length()) + 1;
-    // (-x) & (-y) == ~(x-1) & ~(y-1) == ~((x-1) | (y-1))
-    // == -(((x-1) | (y-1)) + 1)
-    Handle<MutableBigInt> result;
-    if (!AbsoluteSubOne(isolate, x, result_length).ToHandle(&result)) {
-      return MaybeHandle<MutableBigInt>();
+  bool x_sign = x->sign();
+  bool y_sign = y->sign();
+  Handle<MutableBigInt> result;
+  if (!x_sign && !y_sign) {
+    int result_length =
+        bigint::BitwiseAnd_PosPos_ResultLength(x->length(), y->length());
+    result = MutableBigInt::New(isolate, result_length).ToHandleChecked();
+    bigint::BitwiseAnd_PosPos(GetRWDigits(result), GetDigits(x), GetDigits(y));
+    DCHECK(!result->sign());
+  } else if (x_sign && y_sign) {
+    int result_length =
+        bigint::BitwiseAnd_NegNeg_ResultLength(x->length(), y->length());
+    if (!MutableBigInt::New(isolate, result_length).ToHandle(&result)) {
+      return {};
     }
-    Handle<MutableBigInt> y_1 = AbsoluteSubOne(isolate, y);
-    result = AbsoluteOr(isolate, result, y_1, *result);
-    return AbsoluteAddOne(isolate, result, true, *result);
+    bigint::BitwiseAnd_NegNeg(GetRWDigits(result), GetDigits(x), GetDigits(y));
+    result->set_sign(true);
   } else {
-    DCHECK(x->sign() != y->sign());
-    // Assume that x is the positive BigInt.
-    if (x->sign()) std::swap(x, y);
-    // x & (-y) == x & ~(y-1) == x &~ (y-1)
-    Handle<MutableBigInt> y_1 = AbsoluteSubOne(isolate, y);
-    return AbsoluteAndNot(isolate, x, y_1);
+    if (x_sign) std::swap(x, y);
+    int result_length = bigint::BitwiseAnd_PosNeg_ResultLength(x->length());
+    result = MutableBigInt::New(isolate, result_length).ToHandleChecked();
+    bigint::BitwiseAnd_PosNeg(GetRWDigits(result), GetDigits(x), GetDigits(y));
+    DCHECK(!result->sign());
   }
+  return MutableBigInt::MakeImmutable(result);
 }
 
 MaybeHandle<BigInt> BigInt::BitwiseXor(Isolate* isolate, Handle<BigInt> x,
                                        Handle<BigInt> y) {
-  return MutableBigInt::MakeImmutable(MutableBigInt::BitwiseXor(isolate, x, y));
-}
-
-MaybeHandle<MutableBigInt> MutableBigInt::BitwiseXor(Isolate* isolate,
-                                                     Handle<BigInt> x,
-                                                     Handle<BigInt> y) {
-  if (!x->sign() && !y->sign()) {
-    return AbsoluteXor(isolate, x, y);
-  } else if (x->sign() && y->sign()) {
-    int result_length = std::max(x->length(), y->length());
-    // (-x) ^ (-y) == ~(x-1) ^ ~(y-1) == (x-1) ^ (y-1)
-    Handle<MutableBigInt> result =
-        AbsoluteSubOne(isolate, x, result_length).ToHandleChecked();
-    Handle<MutableBigInt> y_1 = AbsoluteSubOne(isolate, y);
-    return AbsoluteXor(isolate, result, y_1, *result);
+  bool x_sign = x->sign();
+  bool y_sign = y->sign();
+  Handle<MutableBigInt> result;
+  if (!x_sign && !y_sign) {
+    int result_length =
+        bigint::BitwiseXor_PosPos_ResultLength(x->length(), y->length());
+    result = MutableBigInt::New(isolate, result_length).ToHandleChecked();
+    bigint::BitwiseXor_PosPos(GetRWDigits(result), GetDigits(x), GetDigits(y));
+    DCHECK(!result->sign());
+  } else if (x_sign && y_sign) {
+    int result_length =
+        bigint::BitwiseXor_NegNeg_ResultLength(x->length(), y->length());
+    result = MutableBigInt::New(isolate, result_length).ToHandleChecked();
+    bigint::BitwiseXor_NegNeg(GetRWDigits(result), GetDigits(x), GetDigits(y));
+    DCHECK(!result->sign());
   } else {
-    DCHECK(x->sign() != y->sign());
-    int result_length = std::max(x->length(), y->length()) + 1;
-    // Assume that x is the positive BigInt.
-    if (x->sign()) std::swap(x, y);
-    // x ^ (-y) == x ^ ~(y-1) == ~(x ^ (y-1)) == -((x ^ (y-1)) + 1)
-    Handle<MutableBigInt> result;
-    if (!AbsoluteSubOne(isolate, y, result_length).ToHandle(&result)) {
-      return MaybeHandle<MutableBigInt>();
+    if (x_sign) std::swap(x, y);
+    int result_length =
+        bigint::BitwiseXor_PosNeg_ResultLength(x->length(), y->length());
+    if (!MutableBigInt::New(isolate, result_length).ToHandle(&result)) {
+      return {};
     }
-    result = AbsoluteXor(isolate, result, x, *result);
-    return AbsoluteAddOne(isolate, result, true, *result);
+    bigint::BitwiseXor_PosNeg(GetRWDigits(result), GetDigits(x), GetDigits(y));
+    result->set_sign(true);
   }
+  return MutableBigInt::MakeImmutable(result);
 }
 
 MaybeHandle<BigInt> BigInt::BitwiseOr(Isolate* isolate, Handle<BigInt> x,
                                       Handle<BigInt> y) {
-  return MutableBigInt::MakeImmutable(MutableBigInt::BitwiseOr(isolate, x, y));
-}
-
-MaybeHandle<MutableBigInt> MutableBigInt::BitwiseOr(Isolate* isolate,
-                                                    Handle<BigInt> x,
-                                                    Handle<BigInt> y) {
-  int result_length = std::max(x->length(), y->length());
-  if (!x->sign() && !y->sign()) {
-    return AbsoluteOr(isolate, x, y);
-  } else if (x->sign() && y->sign()) {
-    // (-x) | (-y) == ~(x-1) | ~(y-1) == ~((x-1) & (y-1))
-    // == -(((x-1) & (y-1)) + 1)
-    Handle<MutableBigInt> result =
-        AbsoluteSubOne(isolate, x, result_length).ToHandleChecked();
-    Handle<MutableBigInt> y_1 = AbsoluteSubOne(isolate, y);
-    result = AbsoluteAnd(isolate, result, y_1, *result);
-    return AbsoluteAddOne(isolate, result, true, *result);
+  bool x_sign = x->sign();
+  bool y_sign = y->sign();
+  int result_length = bigint::BitwiseOrResultLength(x->length(), y->length());
+  Handle<MutableBigInt> result =
+      MutableBigInt::New(isolate, result_length).ToHandleChecked();
+  if (!x_sign && !y_sign) {
+    bigint::BitwiseOr_PosPos(GetRWDigits(result), GetDigits(x), GetDigits(y));
+    DCHECK(!result->sign());
+  } else if (x_sign && y_sign) {
+    bigint::BitwiseOr_NegNeg(GetRWDigits(result), GetDigits(x), GetDigits(y));
+    result->set_sign(true);
   } else {
-    DCHECK(x->sign() != y->sign());
-    // Assume that x is the positive BigInt.
-    if (x->sign()) std::swap(x, y);
-    // x | (-y) == x | ~(y-1) == ~((y-1) &~ x) == -(((y-1) &~ x) + 1)
-    Handle<MutableBigInt> result =
-        AbsoluteSubOne(isolate, y, result_length).ToHandleChecked();
-    result = AbsoluteAndNot(isolate, result, x, *result);
-    return AbsoluteAddOne(isolate, result, true, *result);
+    if (x_sign) std::swap(x, y);
+    bigint::BitwiseOr_PosNeg(GetRWDigits(result), GetDigits(x), GetDigits(y));
+    result->set_sign(true);
   }
+  return MutableBigInt::MakeImmutable(result);
 }
 
 MaybeHandle<BigInt> BigInt::Increment(Isolate* isolate, Handle<BigInt> x) {
@@ -825,27 +768,27 @@ Maybe<bool> BigInt::EqualToString(Isolate* isolate, Handle<BigInt> x,
 }
 
 bool BigInt::EqualToNumber(Handle<BigInt> x, Handle<Object> y) {
-  DCHECK(y->IsNumber());
+  DCHECK(IsNumber(*y));
   // a. If x or y are any of NaN, +∞, or -∞, return false.
   // b. If the mathematical value of x is equal to the mathematical value of y,
   //    return true, otherwise return false.
-  if (y->IsSmi()) {
+  if (IsSmi(*y)) {
     int value = Smi::ToInt(*y);
     if (value == 0) return x->is_zero();
     // Any multi-digit BigInt is bigger than a Smi.
-    STATIC_ASSERT(sizeof(digit_t) >= sizeof(value));
+    static_assert(sizeof(digit_t) >= sizeof(value));
     return (x->length() == 1) && (x->sign() == (value < 0)) &&
            (x->digit(0) ==
             static_cast<digit_t>(std::abs(static_cast<int64_t>(value))));
   }
-  DCHECK(y->IsHeapNumber());
+  DCHECK(IsHeapNumber(*y));
   double value = Handle<HeapNumber>::cast(y)->value();
   return CompareToDouble(x, value) == ComparisonResult::kEqual;
 }
 
 ComparisonResult BigInt::CompareToNumber(Handle<BigInt> x, Handle<Object> y) {
-  DCHECK(y->IsNumber());
-  if (y->IsSmi()) {
+  DCHECK(IsNumber(*y));
+  if (IsSmi(*y)) {
     bool x_sign = x->sign();
     int y_value = Smi::ToInt(*y);
     bool y_sign = (y_value < 0);
@@ -857,7 +800,7 @@ ComparisonResult BigInt::CompareToNumber(Handle<BigInt> x, Handle<Object> y) {
                           : ComparisonResult::kLessThan;
     }
     // Any multi-digit BigInt is bigger than a Smi.
-    STATIC_ASSERT(sizeof(digit_t) >= sizeof(y_value));
+    static_assert(sizeof(digit_t) >= sizeof(y_value));
     if (x->length() > 1) return AbsoluteGreater(x_sign);
 
     digit_t abs_value = std::abs(static_cast<int64_t>(y_value));
@@ -866,7 +809,7 @@ ComparisonResult BigInt::CompareToNumber(Handle<BigInt> x, Handle<Object> y) {
     if (x_digit < abs_value) return AbsoluteLess(x_sign);
     return ComparisonResult::kEqual;
   }
-  DCHECK(y->IsHeapNumber());
+  DCHECK(IsHeapNumber(*y));
   double value = Handle<HeapNumber>::cast(y)->value();
   return CompareToDouble(x, value);
 }
@@ -889,7 +832,7 @@ ComparisonResult BigInt::CompareToDouble(Handle<BigInt> x, double y) {
     DCHECK(!y_sign);
     return ComparisonResult::kLessThan;
   }
-  uint64_t double_bits = bit_cast<uint64_t>(y);
+  uint64_t double_bits = base::bit_cast<uint64_t>(y);
   int raw_exponent =
       static_cast<int>(double_bits >> base::Double::kPhysicalSignificandSize) &
       0x7FF;
@@ -977,6 +920,25 @@ ComparisonResult BigInt::CompareToDouble(Handle<BigInt> x, double y) {
   return ComparisonResult::kEqual;
 }
 
+namespace {
+
+void RightTrimString(Isolate* isolate, Handle<SeqOneByteString> string,
+                     int chars_allocated, int chars_written) {
+  DCHECK_LE(chars_written, chars_allocated);
+  if (chars_written == chars_allocated) return;
+  int string_size =
+      ALIGN_TO_ALLOCATION_ALIGNMENT(SeqOneByteString::SizeFor(chars_allocated));
+  int needed_size =
+      ALIGN_TO_ALLOCATION_ALIGNMENT(SeqOneByteString::SizeFor(chars_written));
+  if (needed_size < string_size && !isolate->heap()->IsLargeObject(*string)) {
+    isolate->heap()->NotifyObjectSizeChange(*string, string_size, needed_size,
+                                            ClearRecordedSlots::kNo);
+  }
+  string->set_length(chars_written, kReleaseStore);
+}
+
+}  // namespace
+
 MaybeHandle<String> BigInt::ToString(Isolate* isolate, Handle<BigInt> bigint,
                                      int radix, ShouldThrow should_throw) {
   if (bigint->is_zero()) {
@@ -1019,6 +981,7 @@ MaybeHandle<String> BigInt::ToString(Isolate* isolate, Handle<BigInt> bigint,
       // out whether all characters were used.
       chars_written = chars_allocated - static_cast<int>(out - start);
       std::memmove(start, out, chars_written);
+      memset(start + chars_written, 0, chars_allocated - chars_written);
     }
   } else {
     // Generic path, handles anything.
@@ -1049,16 +1012,7 @@ MaybeHandle<String> BigInt::ToString(Isolate* isolate, Handle<BigInt> bigint,
 
   // Right-trim any over-allocation (which can happen due to conservative
   // estimates).
-  if (chars_written < chars_allocated) {
-    result->set_length(chars_written, kReleaseStore);
-    int string_size = SeqOneByteString::SizeFor(chars_allocated);
-    int needed_size = SeqOneByteString::SizeFor(chars_written);
-    if (needed_size < string_size && !isolate->heap()->IsLargeObject(*result)) {
-      Address new_end = result->address() + needed_size;
-      isolate->heap()->CreateFillerObjectAt(
-          new_end, (string_size - needed_size), ClearRecordedSlots::kNo);
-    }
-  }
+  RightTrimString(isolate, result, chars_allocated, chars_written);
 #if DEBUG
   // Verify that all characters have been written.
   DCHECK(result->length() == chars_written);
@@ -1071,13 +1025,44 @@ MaybeHandle<String> BigInt::ToString(Isolate* isolate, Handle<BigInt> bigint,
   return result;
 }
 
+Handle<String> BigInt::NoSideEffectsToString(Isolate* isolate,
+                                             Handle<BigInt> bigint) {
+  if (bigint->is_zero()) {
+    return isolate->factory()->zero_string();
+  }
+  // The threshold is chosen such that the operation will be fast enough to
+  // not need interrupt checks. This function is meant for producing human-
+  // readable error messages, so super-long results aren't useful anyway.
+  if (bigint->length() > 100) {
+    return isolate->factory()->NewStringFromStaticChars(
+        "<a very large BigInt>");
+  }
+
+  int chars_allocated =
+      bigint::ToStringResultLength(GetDigits(bigint), 10, bigint->sign());
+  DCHECK_LE(chars_allocated, String::kMaxLength);
+  Handle<SeqOneByteString> result = isolate->factory()
+                                        ->NewRawOneByteString(chars_allocated)
+                                        .ToHandleChecked();
+  int chars_written = chars_allocated;
+  DisallowGarbageCollection no_gc;
+  char* characters = reinterpret_cast<char*>(result->GetChars(no_gc));
+  std::unique_ptr<bigint::Processor, bigint::Processor::Destroyer>
+      non_interruptible_processor(
+          bigint::Processor::New(new bigint::Platform()));
+  non_interruptible_processor->ToString(characters, &chars_written,
+                                        GetDigits(bigint), 10, bigint->sign());
+  RightTrimString(isolate, result, chars_allocated, chars_written);
+  return result;
+}
+
 MaybeHandle<BigInt> BigInt::FromNumber(Isolate* isolate,
                                        Handle<Object> number) {
-  DCHECK(number->IsNumber());
-  if (number->IsSmi()) {
+  DCHECK(IsNumber(*number));
+  if (IsSmi(*number)) {
     return MutableBigInt::NewFromInt(isolate, Smi::ToInt(*number));
   }
-  double value = HeapNumber::cast(*number).value();
+  double value = HeapNumber::cast(*number)->value();
   if (!std::isfinite(value) || (DoubleToInteger(value) != value)) {
     THROW_NEW_ERROR(isolate,
                     NewRangeError(MessageTemplate::kBigIntFromNumber, number),
@@ -1087,21 +1072,22 @@ MaybeHandle<BigInt> BigInt::FromNumber(Isolate* isolate,
 }
 
 MaybeHandle<BigInt> BigInt::FromObject(Isolate* isolate, Handle<Object> obj) {
-  if (obj->IsJSReceiver()) {
+  if (IsJSReceiver(*obj)) {
     ASSIGN_RETURN_ON_EXCEPTION(
         isolate, obj,
-        JSReceiver::ToPrimitive(Handle<JSReceiver>::cast(obj),
+        JSReceiver::ToPrimitive(isolate, Handle<JSReceiver>::cast(obj),
                                 ToPrimitiveHint::kNumber),
         BigInt);
   }
 
-  if (obj->IsBoolean()) {
-    return MutableBigInt::NewFromInt(isolate, obj->BooleanValue(isolate));
+  if (IsBoolean(*obj)) {
+    return MutableBigInt::NewFromInt(isolate,
+                                     Object::BooleanValue(*obj, isolate));
   }
-  if (obj->IsBigInt()) {
+  if (IsBigInt(*obj)) {
     return Handle<BigInt>::cast(obj);
   }
-  if (obj->IsString()) {
+  if (IsString(*obj)) {
     Handle<BigInt> n;
     if (!StringToBigInt(isolate, Handle<String>::cast(obj)).ToHandle(&n)) {
       if (isolate->has_pending_exception()) {
@@ -1193,7 +1179,7 @@ double MutableBigInt::ToDouble(Handle<BigIntBase> x) {
   uint64_t sign_bit = x->sign() ? (static_cast<uint64_t>(1) << 63) : 0;
   exponent = (exponent + 0x3FF) << base::Double::kPhysicalSignificandSize;
   uint64_t double_bits = sign_bit | exponent | mantissa;
-  return bit_cast<double>(double_bits);
+  return base::bit_cast<double>(double_bits);
 }
 
 // This is its own function to simplify control flow. The meaning of the
@@ -1250,7 +1236,7 @@ void BigInt::BigIntShortPrint(std::ostream& os) {
 // modification.
 MaybeHandle<MutableBigInt> MutableBigInt::AbsoluteAddOne(
     Isolate* isolate, Handle<BigIntBase> x, bool sign,
-    MutableBigInt result_storage) {
+    Tagged<MutableBigInt> result_storage) {
   int input_length = x->length();
   // The addition will overflow into a new digit if all existing digits are
   // at maximum.
@@ -1270,16 +1256,12 @@ MaybeHandle<MutableBigInt> MutableBigInt::AbsoluteAddOne(
   } else {
     DCHECK(result->length() == result_length);
   }
-  digit_t carry = 1;
-  for (int i = 0; i < input_length; i++) {
-    digit_t new_carry = 0;
-    result->set_digit(i, digit_add(x->digit(i), carry, &new_carry));
-    carry = new_carry;
-  }
-  if (result_length > input_length) {
-    result->set_digit(input_length, carry);
+  if (input_length == 0) {
+    result->set_digit(0, 1);
+  } else if (input_length == 1 && !will_overflow) {
+    result->set_digit(0, x->digit(0) + 1);
   } else {
-    DCHECK_EQ(carry, 0);
+    bigint::AddOne(GetRWDigits(result), GetDigits(x));
   }
   result->set_sign(sign);
   return result;
@@ -1289,132 +1271,14 @@ MaybeHandle<MutableBigInt> MutableBigInt::AbsoluteAddOne(
 Handle<MutableBigInt> MutableBigInt::AbsoluteSubOne(Isolate* isolate,
                                                     Handle<BigIntBase> x) {
   DCHECK(!x->is_zero());
-  // Requesting a result length identical to an existing BigInt's length
-  // cannot overflow the limit.
-  return AbsoluteSubOne(isolate, x, x->length()).ToHandleChecked();
-}
-
-// Like the above, but you can specify that the allocated result should have
-// length {result_length}, which must be at least as large as {x->length()}.
-MaybeHandle<MutableBigInt> MutableBigInt::AbsoluteSubOne(Isolate* isolate,
-                                                         Handle<BigIntBase> x,
-                                                         int result_length) {
-  DCHECK(!x->is_zero());
-  DCHECK(result_length >= x->length());
-  Handle<MutableBigInt> result;
-  if (!New(isolate, result_length).ToHandle(&result)) {
-    return MaybeHandle<MutableBigInt>();
-  }
   int length = x->length();
-  digit_t borrow = 1;
-  for (int i = 0; i < length; i++) {
-    digit_t new_borrow = 0;
-    result->set_digit(i, digit_sub(x->digit(i), borrow, &new_borrow));
-    borrow = new_borrow;
-  }
-  DCHECK_EQ(borrow, 0);
-  for (int i = length; i < result_length; i++) {
-    result->set_digit(i, borrow);
-  }
-  return result;
-}
-
-// Helper for Absolute{And,AndNot,Or,Xor}.
-// Performs the given binary {op} on digit pairs of {x} and {y}; when the
-// end of the shorter of the two is reached, {extra_digits} configures how
-// remaining digits in the longer input (if {symmetric} == kSymmetric, in
-// {x} otherwise) are handled: copied to the result or ignored.
-// If {result_storage} is non-nullptr, it will be used for the result and
-// any extra digits in it will be zeroed out, otherwise a new BigInt (with
-// the same length as the longer input) will be allocated.
-// {result_storage} may alias {x} or {y} for in-place modification.
-// Example:
-//              y:             [ y2 ][ y1 ][ y0 ]
-//              x:       [ x3 ][ x2 ][ x1 ][ x0 ]
-//                          |     |     |     |
-//                      (kCopy)  (op)  (op)  (op)
-//                          |     |     |     |
-//                          v     v     v     v
-// result_storage: [  0 ][ x3 ][ r2 ][ r1 ][ r0 ]
-inline Handle<MutableBigInt> MutableBigInt::AbsoluteBitwiseOp(
-    Isolate* isolate, Handle<BigIntBase> x, Handle<BigIntBase> y,
-    MutableBigInt result_storage, ExtraDigitsHandling extra_digits,
-    SymmetricOp symmetric, const std::function<digit_t(digit_t, digit_t)>& op) {
-  int x_length = x->length();
-  int y_length = y->length();
-  int num_pairs = y_length;
-  if (x_length < y_length) {
-    num_pairs = x_length;
-    if (symmetric == kSymmetric) {
-      std::swap(x, y);
-      std::swap(x_length, y_length);
-    }
-  }
-  DCHECK(num_pairs == std::min(x_length, y_length));
-  Handle<MutableBigInt> result(result_storage, isolate);
-  int result_length = extra_digits == kCopy ? x_length : num_pairs;
-  if (result_storage.is_null()) {
-    result = New(isolate, result_length).ToHandleChecked();
+  Handle<MutableBigInt> result = New(isolate, length).ToHandleChecked();
+  if (length == 1) {
+    result->set_digit(0, x->digit(0) - 1);
   } else {
-    DCHECK(result_storage.length() >= result_length);
-    result_length = result_storage.length();
-  }
-  int i = 0;
-  for (; i < num_pairs; i++) {
-    result->set_digit(i, op(x->digit(i), y->digit(i)));
-  }
-  if (extra_digits == kCopy) {
-    for (; i < x_length; i++) {
-      result->set_digit(i, x->digit(i));
-    }
-  }
-  for (; i < result_length; i++) {
-    result->set_digit(i, 0);
+    bigint::SubtractOne(GetRWDigits(result), GetDigits(x));
   }
   return result;
-}
-
-// If {result_storage} is non-nullptr, it will be used for the result,
-// otherwise a new BigInt of appropriate length will be allocated.
-// {result_storage} may alias {x} or {y} for in-place modification.
-Handle<MutableBigInt> MutableBigInt::AbsoluteAnd(Isolate* isolate,
-                                                 Handle<BigIntBase> x,
-                                                 Handle<BigIntBase> y,
-                                                 MutableBigInt result_storage) {
-  return AbsoluteBitwiseOp(isolate, x, y, result_storage, kSkip, kSymmetric,
-                           [](digit_t a, digit_t b) { return a & b; });
-}
-
-// If {result_storage} is non-nullptr, it will be used for the result,
-// otherwise a new BigInt of appropriate length will be allocated.
-// {result_storage} may alias {x} or {y} for in-place modification.
-Handle<MutableBigInt> MutableBigInt::AbsoluteAndNot(
-    Isolate* isolate, Handle<BigIntBase> x, Handle<BigIntBase> y,
-    MutableBigInt result_storage) {
-  return AbsoluteBitwiseOp(isolate, x, y, result_storage, kCopy, kNotSymmetric,
-                           [](digit_t a, digit_t b) { return a & ~b; });
-}
-
-// If {result_storage} is non-nullptr, it will be used for the result,
-// otherwise a new BigInt of appropriate length will be allocated.
-// {result_storage} may alias {x} or {y} for in-place modification.
-Handle<MutableBigInt> MutableBigInt::AbsoluteOr(Isolate* isolate,
-                                                Handle<BigIntBase> x,
-                                                Handle<BigIntBase> y,
-                                                MutableBigInt result_storage) {
-  return AbsoluteBitwiseOp(isolate, x, y, result_storage, kCopy, kSymmetric,
-                           [](digit_t a, digit_t b) { return a | b; });
-}
-
-// If {result_storage} is non-nullptr, it will be used for the result,
-// otherwise a new BigInt of appropriate length will be allocated.
-// {result_storage} may alias {x} or {y} for in-place modification.
-Handle<MutableBigInt> MutableBigInt::AbsoluteXor(Isolate* isolate,
-                                                 Handle<BigIntBase> x,
-                                                 Handle<BigIntBase> y,
-                                                 MutableBigInt result_storage) {
-  return AbsoluteBitwiseOp(isolate, x, y, result_storage, kCopy, kSymmetric,
-                           [](digit_t a, digit_t b) { return a ^ b; });
 }
 
 MaybeHandle<BigInt> MutableBigInt::LeftShiftByAbsolute(Isolate* isolate,
@@ -1425,12 +1289,8 @@ MaybeHandle<BigInt> MutableBigInt::LeftShiftByAbsolute(Isolate* isolate,
     return ThrowBigIntTooBig<BigInt>(isolate);
   }
   digit_t shift = maybe_shift.FromJust();
-  int digit_shift = static_cast<int>(shift / kDigitBits);
-  int bits_shift = static_cast<int>(shift % kDigitBits);
-  int length = x->length();
-  bool grow = bits_shift != 0 &&
-              (x->digit(length - 1) >> (kDigitBits - bits_shift)) != 0;
-  int result_length = length + digit_shift + grow;
+  const int result_length = bigint::LeftShift_ResultLength(
+      x->length(), x->digit(x->length() - 1), shift);
   if (result_length > kMaxLength) {
     return ThrowBigIntTooBig<BigInt>(isolate);
   }
@@ -1438,26 +1298,7 @@ MaybeHandle<BigInt> MutableBigInt::LeftShiftByAbsolute(Isolate* isolate,
   if (!New(isolate, result_length).ToHandle(&result)) {
     return MaybeHandle<BigInt>();
   }
-  if (bits_shift == 0) {
-    int i = 0;
-    for (; i < digit_shift; i++) result->set_digit(i, 0ul);
-    for (; i < result_length; i++) {
-      result->set_digit(i, x->digit(i - digit_shift));
-    }
-  } else {
-    digit_t carry = 0;
-    for (int i = 0; i < digit_shift; i++) result->set_digit(i, 0ul);
-    for (int i = 0; i < length; i++) {
-      digit_t d = x->digit(i);
-      result->set_digit(i + digit_shift, (d << bits_shift) | carry);
-      carry = d >> (kDigitBits - bits_shift);
-    }
-    if (grow) {
-      result->set_digit(length + digit_shift, carry);
-    } else {
-      DCHECK_EQ(carry, 0);
-    }
-  }
+  bigint::LeftShift(GetRWDigits(result), GetDigits(x), shift);
   result->set_sign(x->sign());
   return MakeImmutable(result);
 }
@@ -1465,72 +1306,22 @@ MaybeHandle<BigInt> MutableBigInt::LeftShiftByAbsolute(Isolate* isolate,
 Handle<BigInt> MutableBigInt::RightShiftByAbsolute(Isolate* isolate,
                                                    Handle<BigIntBase> x,
                                                    Handle<BigIntBase> y) {
-  int length = x->length();
-  bool sign = x->sign();
+  const bool sign = x->sign();
   Maybe<digit_t> maybe_shift = ToShiftAmount(y);
   if (maybe_shift.IsNothing()) {
     return RightShiftByMaximum(isolate, sign);
   }
-  digit_t shift = maybe_shift.FromJust();
-  int digit_shift = static_cast<int>(shift / kDigitBits);
-  int bits_shift = static_cast<int>(shift % kDigitBits);
-  int result_length = length - digit_shift;
+  const digit_t shift = maybe_shift.FromJust();
+  bigint::RightShiftState state;
+  const int result_length =
+      bigint::RightShift_ResultLength(GetDigits(x), sign, shift, &state);
+  DCHECK_LE(result_length, x->length());
   if (result_length <= 0) {
     return RightShiftByMaximum(isolate, sign);
   }
-  // For negative numbers, round down if any bit was shifted out (so that e.g.
-  // -5n >> 1n == -3n and not -2n). Check now whether this will happen and
-  // whether it can cause overflow into a new digit. If we allocate the result
-  // large enough up front, it avoids having to do a second allocation later.
-  bool must_round_down = false;
-  if (sign) {
-    const digit_t mask = (static_cast<digit_t>(1) << bits_shift) - 1;
-    if ((x->digit(digit_shift) & mask) != 0) {
-      must_round_down = true;
-    } else {
-      for (int i = 0; i < digit_shift; i++) {
-        if (x->digit(i) != 0) {
-          must_round_down = true;
-          break;
-        }
-      }
-    }
-  }
-  // If bits_shift is non-zero, it frees up bits, preventing overflow.
-  if (must_round_down && bits_shift == 0) {
-    // Overflow cannot happen if the most significant digit has unset bits.
-    digit_t msd = x->digit(length - 1);
-    bool rounding_can_overflow = digit_ismax(msd);
-    if (rounding_can_overflow) result_length++;
-  }
-
-  DCHECK_LE(result_length, length);
   Handle<MutableBigInt> result = New(isolate, result_length).ToHandleChecked();
-  if (bits_shift == 0) {
-    // Zero out any overflow digit (see "rounding_can_overflow" above).
-    result->set_digit(result_length - 1, 0);
-    for (int i = digit_shift; i < length; i++) {
-      result->set_digit(i - digit_shift, x->digit(i));
-    }
-  } else {
-    digit_t carry = x->digit(digit_shift) >> bits_shift;
-    int last = length - digit_shift - 1;
-    for (int i = 0; i < last; i++) {
-      digit_t d = x->digit(i + digit_shift + 1);
-      result->set_digit(i, (d << (kDigitBits - bits_shift)) | carry);
-      carry = d >> bits_shift;
-    }
-    result->set_digit(last, carry);
-  }
-
-  if (sign) {
-    result->set_sign(true);
-    if (must_round_down) {
-      // Since the result is negative, rounding down means adding one to
-      // its absolute value. This cannot overflow.
-      result = AbsoluteAddOne(isolate, result, true, *result).ToHandleChecked();
-    }
-  }
+  bigint::RightShift(GetRWDigits(result), GetDigits(x), shift, state);
+  if (sign) result->set_sign(true);
   return MakeImmutable(result);
 }
 
@@ -1548,7 +1339,8 @@ Handle<BigInt> MutableBigInt::RightShiftByMaximum(Isolate* isolate, bool sign) {
 Maybe<BigInt::digit_t> MutableBigInt::ToShiftAmount(Handle<BigIntBase> x) {
   if (x->length() > 1) return Nothing<digit_t>();
   digit_t value = x->digit(0);
-  STATIC_ASSERT(kMaxLengthBits < std::numeric_limits<digit_t>::max());
+  // The Torque builtin also depends on the assertion.
+  static_assert(kMaxLengthBits < std::numeric_limits<digit_t>::max());
   if (value > kMaxLengthBits) return Nothing<digit_t>();
   return Just(value);
 }
@@ -1587,7 +1379,7 @@ uint32_t BigInt::GetBitfieldForSerialization() const {
   // In order to make the serialization format the same on 32/64 bit builds,
   // we convert the length-in-digits to length-in-bytes for serialization.
   // Being able to do this depends on having enough LengthBits:
-  STATIC_ASSERT(kMaxLength * kDigitSize <= LengthBits::kMax);
+  static_assert(kMaxLength * kDigitSize <= LengthBits::kMax);
   int bytelength = length() * kDigitSize;
   return SignBits::encode(sign()) | LengthBits::encode(bytelength);
 }
@@ -1624,6 +1416,8 @@ MaybeHandle<BigInt> BigInt::FromSerializedDigits(
   DCHECK(digits_storage.length() == bytelength);
   bool sign = SignBits::decode(bitfield);
   int length = (bytelength + kDigitSize - 1) / kDigitSize;  // Round up.
+  // There is no -0n. Reject corrupted serialized data.
+  if (length == 0 && sign == true) return {};
   Handle<MutableBigInt> result =
       MutableBigInt::Cast(isolate->factory()->NewBigInt(length));
   result->initialize_bitfield(sign, length);
@@ -1645,10 +1439,10 @@ MaybeHandle<BigInt> BigInt::FromSerializedDigits(
   }
   if (bytelength % kDigitSize) {
     *digit = 0;
-    byte* digit_byte = reinterpret_cast<byte*>(digit);
+    uint8_t* digit_byte = reinterpret_cast<uint8_t*>(digit);
     digit_byte += sizeof(*digit) - 1;
-    const byte* digit_storage_byte =
-        reinterpret_cast<const byte*>(digit_storage);
+    const uint8_t* digit_storage_byte =
+        reinterpret_cast<const uint8_t*>(digit_storage);
     for (int i = 0; i < bytelength % kDigitSize; i++) {
       *digit_byte = *digit_storage_byte;
       digit_byte--;
@@ -1660,165 +1454,46 @@ MaybeHandle<BigInt> BigInt::FromSerializedDigits(
 }
 
 Handle<BigInt> BigInt::AsIntN(Isolate* isolate, uint64_t n, Handle<BigInt> x) {
-  if (x->is_zero()) return x;
+  if (x->is_zero() || n > kMaxLengthBits) return x;
   if (n == 0) return MutableBigInt::Zero(isolate);
-  uint64_t needed_length = (n + kDigitBits - 1) / kDigitBits;
-  uint64_t x_length = static_cast<uint64_t>(x->length());
-  // If {x} has less than {n} bits, return it directly.
-  if (x_length < needed_length) return x;
-  DCHECK_LE(needed_length, kMaxInt);
-  digit_t top_digit = x->digit(static_cast<int>(needed_length) - 1);
-  digit_t compare_digit = static_cast<digit_t>(1) << ((n - 1) % kDigitBits);
-  if (x_length == needed_length && top_digit < compare_digit) return x;
-  // Otherwise we have to truncate (which is a no-op in the special case
-  // of x == -2^(n-1)), and determine the right sign. We also might have
-  // to subtract from 2^n to simulate having two's complement representation.
-  // In most cases, the result's sign is x->sign() xor "(n-1)th bit present".
-  // The only exception is when x is negative, has the (n-1)th bit, and all
-  // its bits below (n-1) are zero. In that case, the result is the minimum
-  // n-bit integer (example: asIntN(3, -12n) => -4n).
-  bool has_bit = (top_digit & compare_digit) == compare_digit;
-  DCHECK_LE(n, kMaxInt);
-  int N = static_cast<int>(n);
-  if (!has_bit) {
-    return MutableBigInt::TruncateToNBits(isolate, N, x);
-  }
-  if (!x->sign()) {
-    return MutableBigInt::TruncateAndSubFromPowerOfTwo(isolate, N, x, true);
-  }
-  // Negative numbers must subtract from 2^n, except for the special case
-  // described above.
-  if ((top_digit & (compare_digit - 1)) == 0) {
-    for (int i = static_cast<int>(needed_length) - 2; i >= 0; i--) {
-      if (x->digit(i) != 0) {
-        return MutableBigInt::TruncateAndSubFromPowerOfTwo(isolate, N, x,
-                                                           false);
-      }
-    }
-    // Truncation is no-op if x == -2^(n-1).
-    if (x_length == needed_length && top_digit == compare_digit) return x;
-    return MutableBigInt::TruncateToNBits(isolate, N, x);
-  }
-  return MutableBigInt::TruncateAndSubFromPowerOfTwo(isolate, N, x, false);
+  int needed_length =
+      bigint::AsIntNResultLength(GetDigits(x), x->sign(), static_cast<int>(n));
+  if (needed_length == -1) return x;
+  Handle<MutableBigInt> result =
+      MutableBigInt::New(isolate, needed_length).ToHandleChecked();
+  bool negative = bigint::AsIntN(GetRWDigits(result), GetDigits(x), x->sign(),
+                                 static_cast<int>(n));
+  result->set_sign(negative);
+  return MutableBigInt::MakeImmutable(result);
 }
 
 MaybeHandle<BigInt> BigInt::AsUintN(Isolate* isolate, uint64_t n,
                                     Handle<BigInt> x) {
   if (x->is_zero()) return x;
   if (n == 0) return MutableBigInt::Zero(isolate);
-  // If {x} is negative, simulate two's complement representation.
+  Handle<MutableBigInt> result;
   if (x->sign()) {
     if (n > kMaxLengthBits) {
       return ThrowBigIntTooBig<BigInt>(isolate);
     }
-    return MutableBigInt::TruncateAndSubFromPowerOfTwo(
-        isolate, static_cast<int>(n), x, false);
-  }
-  // If {x} is positive and has up to {n} bits, return it directly.
-  if (n >= kMaxLengthBits) return x;
-  STATIC_ASSERT(kMaxLengthBits < kMaxInt - kDigitBits);
-  int needed_length = static_cast<int>((n + kDigitBits - 1) / kDigitBits);
-  if (x->length() < needed_length) return x;
-  int bits_in_top_digit = n % kDigitBits;
-  if (x->length() == needed_length) {
-    if (bits_in_top_digit == 0) return x;
-    digit_t top_digit = x->digit(needed_length - 1);
-    if ((top_digit >> bits_in_top_digit) == 0) return x;
-  }
-  // Otherwise, truncate.
-  DCHECK_LE(n, kMaxInt);
-  return MutableBigInt::TruncateToNBits(isolate, static_cast<int>(n), x);
-}
-
-Handle<BigInt> MutableBigInt::TruncateToNBits(Isolate* isolate, int n,
-                                              Handle<BigInt> x) {
-  // Only call this when there's something to do.
-  DCHECK_NE(n, 0);
-  DCHECK_GT(x->length(), n / kDigitBits);
-
-  int needed_digits = (n + (kDigitBits - 1)) / kDigitBits;
-  DCHECK_LE(needed_digits, x->length());
-  Handle<MutableBigInt> result = New(isolate, needed_digits).ToHandleChecked();
-
-  // Copy all digits except the MSD.
-  int last = needed_digits - 1;
-  for (int i = 0; i < last; i++) {
-    result->set_digit(i, x->digit(i));
-  }
-
-  // The MSD might contain extra bits that we don't want.
-  digit_t msd = x->digit(last);
-  if (n % kDigitBits != 0) {
-    int drop = kDigitBits - (n % kDigitBits);
-    msd = (msd << drop) >> drop;
-  }
-  result->set_digit(last, msd);
-  result->set_sign(x->sign());
-  return MakeImmutable(result);
-}
-
-// Subtracts the least significant n bits of abs(x) from 2^n.
-Handle<BigInt> MutableBigInt::TruncateAndSubFromPowerOfTwo(Isolate* isolate,
-                                                           int n,
-                                                           Handle<BigInt> x,
-                                                           bool result_sign) {
-  DCHECK_NE(n, 0);
-  DCHECK_LE(n, kMaxLengthBits);
-
-  int needed_digits = (n + (kDigitBits - 1)) / kDigitBits;
-  DCHECK_LE(needed_digits, kMaxLength);  // Follows from n <= kMaxLengthBits.
-  Handle<MutableBigInt> result = New(isolate, needed_digits).ToHandleChecked();
-
-  // Process all digits except the MSD.
-  int i = 0;
-  int last = needed_digits - 1;
-  int x_length = x->length();
-  digit_t borrow = 0;
-  // Take digits from {x} unless its length is exhausted.
-  int limit = std::min(last, x_length);
-  for (; i < limit; i++) {
-    digit_t new_borrow = 0;
-    digit_t difference = digit_sub(0, x->digit(i), &new_borrow);
-    difference = digit_sub(difference, borrow, &new_borrow);
-    result->set_digit(i, difference);
-    borrow = new_borrow;
-  }
-  // Then simulate leading zeroes in {x} as needed.
-  for (; i < last; i++) {
-    digit_t new_borrow = 0;
-    digit_t difference = digit_sub(0, borrow, &new_borrow);
-    result->set_digit(i, difference);
-    borrow = new_borrow;
-  }
-
-  // The MSD might contain extra bits that we don't want.
-  digit_t msd = last < x_length ? x->digit(last) : 0;
-  int msd_bits_consumed = n % kDigitBits;
-  digit_t result_msd;
-  if (msd_bits_consumed == 0) {
-    digit_t new_borrow = 0;
-    result_msd = digit_sub(0, msd, &new_borrow);
-    result_msd = digit_sub(result_msd, borrow, &new_borrow);
+    int result_length = bigint::AsUintN_Neg_ResultLength(static_cast<int>(n));
+    result = MutableBigInt::New(isolate, result_length).ToHandleChecked();
+    bigint::AsUintN_Neg(GetRWDigits(result), GetDigits(x), static_cast<int>(n));
   } else {
-    int drop = kDigitBits - msd_bits_consumed;
-    msd = (msd << drop) >> drop;
-    digit_t minuend_msd = static_cast<digit_t>(1) << (kDigitBits - drop);
-    digit_t new_borrow = 0;
-    result_msd = digit_sub(minuend_msd, msd, &new_borrow);
-    result_msd = digit_sub(result_msd, borrow, &new_borrow);
-    DCHECK_EQ(new_borrow, 0);  // result < 2^n.
-    // If all subtracted bits were zero, we have to get rid of the
-    // materialized minuend_msd again.
-    result_msd &= (minuend_msd - 1);
+    if (n >= kMaxLengthBits) return x;
+    int result_length =
+        bigint::AsUintN_Pos_ResultLength(GetDigits(x), static_cast<int>(n));
+    if (result_length < 0) return x;
+    result = MutableBigInt::New(isolate, result_length).ToHandleChecked();
+    bigint::AsUintN_Pos(GetRWDigits(result), GetDigits(x), static_cast<int>(n));
   }
-  result->set_digit(last, result_msd);
-  result->set_sign(result_sign);
-  return MakeImmutable(result);
+  DCHECK(!result->sign());
+  return MutableBigInt::MakeImmutable(result);
 }
 
 Handle<BigInt> BigInt::FromInt64(Isolate* isolate, int64_t n) {
   if (n == 0) return MutableBigInt::Zero(isolate);
-  STATIC_ASSERT(kDigitBits == 64 || kDigitBits == 32);
+  static_assert(kDigitBits == 64 || kDigitBits == 32);
   int length = 64 / kDigitBits;
   Handle<MutableBigInt> result =
       MutableBigInt::Cast(isolate->factory()->NewBigInt(length));
@@ -1840,7 +1515,7 @@ Handle<BigInt> BigInt::FromInt64(Isolate* isolate, int64_t n) {
 
 Handle<BigInt> BigInt::FromUint64(Isolate* isolate, uint64_t n) {
   if (n == 0) return MutableBigInt::Zero(isolate);
-  STATIC_ASSERT(kDigitBits == 64 || kDigitBits == 32);
+  static_assert(kDigitBits == 64 || kDigitBits == 32);
   int length = 64 / kDigitBits;
   Handle<MutableBigInt> result =
       MutableBigInt::Cast(isolate->factory()->NewBigInt(length));
@@ -1856,7 +1531,7 @@ MaybeHandle<BigInt> BigInt::FromWords64(Isolate* isolate, int sign_bit,
     return ThrowBigIntTooBig<BigInt>(isolate);
   }
   if (words64_count == 0) return MutableBigInt::Zero(isolate);
-  STATIC_ASSERT(kDigitBits == 64 || kDigitBits == 32);
+  static_assert(kDigitBits == 64 || kDigitBits == 32);
   int length = (64 / kDigitBits) * words64_count;
   DCHECK_GT(length, 0);
   if (kDigitBits == 32 && words[words64_count - 1] <= (1ULL << 32)) length--;
@@ -1884,7 +1559,7 @@ MaybeHandle<BigInt> BigInt::FromWords64(Isolate* isolate, int sign_bit,
 }
 
 int BigInt::Words64Count() {
-  STATIC_ASSERT(kDigitBits == 64 || kDigitBits == 32);
+  static_assert(kDigitBits == 64 || kDigitBits == 32);
   return length() / (64 / kDigitBits) +
          (kDigitBits == 32 && length() % 2 == 1 ? 1 : 0);
 }
@@ -1912,18 +1587,18 @@ void BigInt::ToWordsArray64(int* sign_bit, int* words64_count,
   }
 }
 
-uint64_t MutableBigInt::GetRawBits(BigIntBase x, bool* lossless) {
+uint64_t MutableBigInt::GetRawBits(Tagged<BigIntBase> x, bool* lossless) {
   if (lossless != nullptr) *lossless = true;
-  if (x.is_zero()) return 0;
-  int len = x.length();
-  STATIC_ASSERT(kDigitBits == 64 || kDigitBits == 32);
+  if (x->is_zero()) return 0;
+  int len = x->length();
+  static_assert(kDigitBits == 64 || kDigitBits == 32);
   if (lossless != nullptr && len > 64 / kDigitBits) *lossless = false;
-  uint64_t raw = static_cast<uint64_t>(x.digit(0));
+  uint64_t raw = static_cast<uint64_t>(x->digit(0));
   if (kDigitBits == 32 && len > 1) {
-    raw |= static_cast<uint64_t>(x.digit(1)) << 32;
+    raw |= static_cast<uint64_t>(x->digit(1)) << 32;
   }
   // Simulate two's complement. MSVC dislikes "-raw".
-  return x.sign() ? ((~raw) + 1u) : raw;
+  return x->sign() ? ((~raw) + 1u) : raw;
 }
 
 int64_t BigInt::AsInt64(bool* lossless) {
@@ -1939,51 +1614,8 @@ uint64_t BigInt::AsUint64(bool* lossless) {
   return result;
 }
 
-// Digit arithmetic helpers.
-
-#if V8_TARGET_ARCH_32_BIT
-#define HAVE_TWODIGIT_T 1
-using twodigit_t = uint64_t;
-#elif defined(__SIZEOF_INT128__)
-// Both Clang and GCC support this on x64.
-#define HAVE_TWODIGIT_T 1
-using twodigit_t = __uint128_t;
-#endif
-
-// {carry} must point to an initialized digit_t and will either be incremented
-// by one or left alone.
-inline BigInt::digit_t MutableBigInt::digit_add(digit_t a, digit_t b,
-                                                digit_t* carry) {
-#if HAVE_TWODIGIT_T
-  twodigit_t result = static_cast<twodigit_t>(a) + static_cast<twodigit_t>(b);
-  *carry += result >> kDigitBits;
-  return static_cast<digit_t>(result);
-#else
-  digit_t result = a + b;
-  if (result < a) *carry += 1;
-  return result;
-#endif
-}
-
-// {borrow} must point to an initialized digit_t and will either be incremented
-// by one or left alone.
-inline BigInt::digit_t MutableBigInt::digit_sub(digit_t a, digit_t b,
-                                                digit_t* borrow) {
-#if HAVE_TWODIGIT_T
-  twodigit_t result = static_cast<twodigit_t>(a) - static_cast<twodigit_t>(b);
-  *borrow += (result >> kDigitBits) & 1;
-  return static_cast<digit_t>(result);
-#else
-  digit_t result = a - b;
-  if (result > a) *borrow += 1;
-  return static_cast<digit_t>(result);
-#endif
-}
-
-#undef HAVE_TWODIGIT_T
-
 void MutableBigInt::set_64_bits(uint64_t bits) {
-  STATIC_ASSERT(kDigitBits == 64 || kDigitBits == 32);
+  static_assert(kDigitBits == 64 || kDigitBits == 32);
   if (kDigitBits == 64) {
     set_digit(0, static_cast<digit_t>(bits));
   } else {
@@ -2011,28 +1643,248 @@ void BigIntBase::BigIntBasePrint(std::ostream& os) {
 
 void MutableBigInt_AbsoluteAddAndCanonicalize(Address result_addr,
                                               Address x_addr, Address y_addr) {
-  BigInt x = BigInt::cast(Object(x_addr));
-  BigInt y = BigInt::cast(Object(y_addr));
-  MutableBigInt result = MutableBigInt::cast(Object(result_addr));
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
 
   bigint::Add(GetRWDigits(result), GetDigits(x), GetDigits(y));
   MutableBigInt::Canonicalize(result);
 }
 
 int32_t MutableBigInt_AbsoluteCompare(Address x_addr, Address y_addr) {
-  BigInt x = BigInt::cast(Object(x_addr));
-  BigInt y = BigInt::cast(Object(y_addr));
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
 
   return bigint::Compare(GetDigits(x), GetDigits(y));
 }
 
 void MutableBigInt_AbsoluteSubAndCanonicalize(Address result_addr,
                                               Address x_addr, Address y_addr) {
-  BigInt x = BigInt::cast(Object(x_addr));
-  BigInt y = BigInt::cast(Object(y_addr));
-  MutableBigInt result = MutableBigInt::cast(Object(result_addr));
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
 
   bigint::Subtract(GetRWDigits(result), GetDigits(x), GetDigits(y));
+  MutableBigInt::Canonicalize(result);
+}
+
+// Returns 0 if it succeeded to obtain the result of multiplication.
+// Returns 1 if the computation is interrupted.
+int32_t MutableBigInt_AbsoluteMulAndCanonicalize(Address result_addr,
+                                                 Address x_addr,
+                                                 Address y_addr) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+
+  Isolate* isolate;
+  if (!GetIsolateFromHeapObject(x, &isolate)) {
+    // We should always get the isolate from the BigInt.
+    UNREACHABLE();
+  }
+
+  bigint::Status status = isolate->bigint_processor()->Multiply(
+      GetRWDigits(result), GetDigits(x), GetDigits(y));
+  if (status == bigint::Status::kInterrupted) {
+    return 1;
+  }
+
+  MutableBigInt::Canonicalize(result);
+  return 0;
+}
+
+int32_t MutableBigInt_AbsoluteDivAndCanonicalize(Address result_addr,
+                                                 Address x_addr,
+                                                 Address y_addr) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+  DCHECK_GE(result->length(),
+            bigint::DivideResultLength(GetDigits(x), GetDigits(y)));
+
+  Isolate* isolate;
+  if (!GetIsolateFromHeapObject(x, &isolate)) {
+    // We should always get the isolate from the BigInt.
+    UNREACHABLE();
+  }
+
+  bigint::Status status = isolate->bigint_processor()->Divide(
+      GetRWDigits(result), GetDigits(x), GetDigits(y));
+  if (status == bigint::Status::kInterrupted) {
+    return 1;
+  }
+
+  MutableBigInt::Canonicalize(result);
+  return 0;
+}
+
+int32_t MutableBigInt_AbsoluteModAndCanonicalize(Address result_addr,
+                                                 Address x_addr,
+                                                 Address y_addr) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+
+  Isolate* isolate;
+  if (!GetIsolateFromHeapObject(x, &isolate)) {
+    // We should always get the isolate from the BigInt.
+    UNREACHABLE();
+  }
+
+  bigint::Status status = isolate->bigint_processor()->Modulo(
+      GetRWDigits(result), GetDigits(x), GetDigits(y));
+  if (status == bigint::Status::kInterrupted) {
+    return 1;
+  }
+
+  MutableBigInt::Canonicalize(result);
+  return 0;
+}
+
+void MutableBigInt_BitwiseAndPosPosAndCanonicalize(Address result_addr,
+                                                   Address x_addr,
+                                                   Address y_addr) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+
+  bigint::BitwiseAnd_PosPos(GetRWDigits(result), GetDigits(x), GetDigits(y));
+  MutableBigInt::Canonicalize(result);
+}
+
+void MutableBigInt_BitwiseAndNegNegAndCanonicalize(Address result_addr,
+                                                   Address x_addr,
+                                                   Address y_addr) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+
+  bigint::BitwiseAnd_NegNeg(GetRWDigits(result), GetDigits(x), GetDigits(y));
+  MutableBigInt::Canonicalize(result);
+}
+
+void MutableBigInt_BitwiseAndPosNegAndCanonicalize(Address result_addr,
+                                                   Address x_addr,
+                                                   Address y_addr) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+
+  bigint::BitwiseAnd_PosNeg(GetRWDigits(result), GetDigits(x), GetDigits(y));
+  MutableBigInt::Canonicalize(result);
+}
+
+void MutableBigInt_BitwiseOrPosPosAndCanonicalize(Address result_addr,
+                                                  Address x_addr,
+                                                  Address y_addr) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+
+  bigint::BitwiseOr_PosPos(GetRWDigits(result), GetDigits(x), GetDigits(y));
+  MutableBigInt::Canonicalize(result);
+}
+
+void MutableBigInt_BitwiseOrNegNegAndCanonicalize(Address result_addr,
+                                                  Address x_addr,
+                                                  Address y_addr) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+
+  bigint::BitwiseOr_NegNeg(GetRWDigits(result), GetDigits(x), GetDigits(y));
+  MutableBigInt::Canonicalize(result);
+}
+
+void MutableBigInt_BitwiseOrPosNegAndCanonicalize(Address result_addr,
+                                                  Address x_addr,
+                                                  Address y_addr) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+
+  bigint::BitwiseOr_PosNeg(GetRWDigits(result), GetDigits(x), GetDigits(y));
+  MutableBigInt::Canonicalize(result);
+}
+
+void MutableBigInt_BitwiseXorPosPosAndCanonicalize(Address result_addr,
+                                                   Address x_addr,
+                                                   Address y_addr) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+
+  bigint::BitwiseXor_PosPos(GetRWDigits(result), GetDigits(x), GetDigits(y));
+  MutableBigInt::Canonicalize(result);
+}
+
+void MutableBigInt_BitwiseXorNegNegAndCanonicalize(Address result_addr,
+                                                   Address x_addr,
+                                                   Address y_addr) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+
+  bigint::BitwiseXor_NegNeg(GetRWDigits(result), GetDigits(x), GetDigits(y));
+  MutableBigInt::Canonicalize(result);
+}
+
+void MutableBigInt_BitwiseXorPosNegAndCanonicalize(Address result_addr,
+                                                   Address x_addr,
+                                                   Address y_addr) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<BigInt> y = BigInt::cast(Tagged<Object>(y_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+
+  bigint::BitwiseXor_PosNeg(GetRWDigits(result), GetDigits(x), GetDigits(y));
+  MutableBigInt::Canonicalize(result);
+}
+
+void MutableBigInt_LeftShiftAndCanonicalize(Address result_addr, Address x_addr,
+                                            intptr_t shift) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+
+  bigint::LeftShift(GetRWDigits(result), GetDigits(x), shift);
+  MutableBigInt::Canonicalize(result);
+}
+
+uint32_t RightShiftResultLength(Address x_addr, uint32_t x_sign,
+                                intptr_t shift) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  bigint::RightShiftState state;
+  int length =
+      bigint::RightShift_ResultLength(GetDigits(x), x_sign, shift, &state);
+  // {length} should be non-negative and fit in 30 bits.
+  DCHECK_EQ(length >> BigInt::kLengthFieldBits, 0);
+  return (static_cast<uint32_t>(state.must_round_down)
+          << BigInt::kLengthFieldBits) |
+         length;
+}
+
+void MutableBigInt_RightShiftAndCanonicalize(Address result_addr,
+                                             Address x_addr, intptr_t shift,
+                                             uint32_t must_round_down) {
+  Tagged<BigInt> x = BigInt::cast(Tagged<Object>(x_addr));
+  Tagged<MutableBigInt> result =
+      MutableBigInt::cast(Tagged<Object>(result_addr));
+  bigint::RightShiftState state{must_round_down == 1};
+  bigint::RightShift(GetRWDigits(result), GetDigits(x), shift, state);
   MutableBigInt::Canonicalize(result);
 }
 

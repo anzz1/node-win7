@@ -4,6 +4,8 @@
 
 #include "src/heap/cppgc/page-memory.h"
 
+#include <cstddef>
+
 #include "src/base/macros.h"
 #include "src/base/sanitizer/asan.h"
 #include "src/heap/cppgc/platform.h"
@@ -13,60 +15,49 @@ namespace internal {
 
 namespace {
 
-void Unprotect(PageAllocator& allocator, FatalOutOfMemoryHandler& oom_handler,
-               const PageMemory& page_memory) {
+V8_WARN_UNUSED_RESULT bool TryUnprotect(PageAllocator& allocator,
+                                        const PageMemory& page_memory) {
   if (SupportsCommittingGuardPages(allocator)) {
-    if (!allocator.SetPermissions(page_memory.writeable_region().base(),
-                                  page_memory.writeable_region().size(),
-                                  PageAllocator::Permission::kReadWrite)) {
-      oom_handler("Oilpan: Unprotecting memory.");
-    }
-  } else {
-    // No protection in case the allocator cannot commit at the required
-    // granularity. Only protect if the allocator supports committing at that
-    // granularity.
-    //
-    // The allocator needs to support committing the overall range.
-    CHECK_EQ(0u,
-             page_memory.overall_region().size() % allocator.CommitPageSize());
-    if (!allocator.SetPermissions(page_memory.overall_region().base(),
-                                  page_memory.overall_region().size(),
-                                  PageAllocator::Permission::kReadWrite)) {
-      oom_handler("Oilpan: Unprotecting memory.");
-    }
+    return allocator.SetPermissions(page_memory.writeable_region().base(),
+                                    page_memory.writeable_region().size(),
+                                    PageAllocator::Permission::kReadWrite);
   }
+  // No protection using guard pages in case the allocator cannot commit at
+  // the required granularity. Only protect if the allocator supports
+  // committing at that granularity.
+  //
+  // The allocator needs to support committing the overall range.
+  CHECK_EQ(0u,
+           page_memory.overall_region().size() % allocator.CommitPageSize());
+  return allocator.SetPermissions(page_memory.overall_region().base(),
+                                  page_memory.overall_region().size(),
+                                  PageAllocator::Permission::kReadWrite);
 }
 
-void Protect(PageAllocator& allocator, FatalOutOfMemoryHandler& oom_handler,
-             const PageMemory& page_memory) {
+V8_WARN_UNUSED_RESULT bool TryProtect(PageAllocator& allocator,
+                                      const PageMemory& page_memory) {
   if (SupportsCommittingGuardPages(allocator)) {
     // Swap the same region, providing the OS with a chance for fast lookup and
     // change.
-    if (!allocator.SetPermissions(page_memory.writeable_region().base(),
-                                  page_memory.writeable_region().size(),
-                                  PageAllocator::Permission::kNoAccess)) {
-      oom_handler("Oilpan: Protecting memory.");
-    }
-  } else {
-    // See Unprotect().
-    CHECK_EQ(0u,
-             page_memory.overall_region().size() % allocator.CommitPageSize());
-    if (!allocator.SetPermissions(page_memory.overall_region().base(),
-                                  page_memory.overall_region().size(),
-                                  PageAllocator::Permission::kNoAccess)) {
-      oom_handler("Oilpan: Protecting memory.");
-    }
+    return allocator.SetPermissions(page_memory.writeable_region().base(),
+                                    page_memory.writeable_region().size(),
+                                    PageAllocator::Permission::kNoAccess);
   }
+  // See Unprotect().
+  CHECK_EQ(0u,
+           page_memory.overall_region().size() % allocator.CommitPageSize());
+  return allocator.SetPermissions(page_memory.overall_region().base(),
+                                  page_memory.overall_region().size(),
+                                  PageAllocator::Permission::kNoAccess);
 }
 
-MemoryRegion ReserveMemoryRegion(PageAllocator& allocator,
-                                 FatalOutOfMemoryHandler& oom_handler,
-                                 size_t allocation_size) {
+v8::base::Optional<MemoryRegion> ReserveMemoryRegion(PageAllocator& allocator,
+                                                     size_t allocation_size) {
   void* region_memory =
       allocator.AllocatePages(nullptr, allocation_size, kPageSize,
                               PageAllocator::Permission::kNoAccess);
   if (!region_memory) {
-    oom_handler("Oilpan: Reserving memory.");
+    return v8::base::nullopt;
   }
   const MemoryRegion reserved_region(static_cast<Address>(region_memory),
                                      allocation_size);
@@ -84,10 +75,8 @@ void FreeMemoryRegion(PageAllocator& allocator,
 }  // namespace
 
 PageMemoryRegion::PageMemoryRegion(PageAllocator& allocator,
-                                   FatalOutOfMemoryHandler& oom_handler,
                                    MemoryRegion reserved_region, bool is_large)
     : allocator_(allocator),
-      oom_handler_(oom_handler),
       reserved_region_(reserved_region),
       is_large_(is_large) {}
 
@@ -98,14 +87,21 @@ PageMemoryRegion::~PageMemoryRegion() {
 // static
 constexpr size_t NormalPageMemoryRegion::kNumPageRegions;
 
-NormalPageMemoryRegion::NormalPageMemoryRegion(
-    PageAllocator& allocator, FatalOutOfMemoryHandler& oom_handler)
-    : PageMemoryRegion(
-          allocator, oom_handler,
-          ReserveMemoryRegion(allocator, oom_handler,
-                              RoundUp(kPageSize * kNumPageRegions,
-                                      allocator.AllocatePageSize())),
-          false) {
+// static
+std::unique_ptr<NormalPageMemoryRegion> NormalPageMemoryRegion::Create(
+    PageAllocator& allocator) {
+  const auto region = ReserveMemoryRegion(
+      allocator,
+      RoundUp(kPageSize * kNumPageRegions, allocator.AllocatePageSize()));
+  if (!region) return {};
+  auto result = std::unique_ptr<NormalPageMemoryRegion>(
+      new NormalPageMemoryRegion(allocator, *region));
+  return result;
+}
+
+NormalPageMemoryRegion::NormalPageMemoryRegion(PageAllocator& allocator,
+                                               MemoryRegion region)
+    : PageMemoryRegion(allocator, region, false) {
 #ifdef DEBUG
   for (size_t i = 0; i < kNumPageRegions; ++i) {
     DCHECK_EQ(false, page_memories_in_use_[i]);
@@ -115,38 +111,47 @@ NormalPageMemoryRegion::NormalPageMemoryRegion(
 
 NormalPageMemoryRegion::~NormalPageMemoryRegion() = default;
 
-void NormalPageMemoryRegion::Allocate(Address writeable_base) {
+bool NormalPageMemoryRegion::TryAllocate(Address writeable_base) {
   const size_t index = GetIndex(writeable_base);
-  ChangeUsed(index, true);
-  Unprotect(allocator_, oom_handler_, GetPageMemory(index));
+  if (TryUnprotect(allocator_, GetPageMemory(index))) {
+    ChangeUsed(index, true);
+    return true;
+  }
+  return false;
 }
 
 void NormalPageMemoryRegion::Free(Address writeable_base) {
   const size_t index = GetIndex(writeable_base);
   ChangeUsed(index, false);
-  Protect(allocator_, oom_handler_, GetPageMemory(index));
+  CHECK(TryProtect(allocator_, GetPageMemory(index)));
 }
 
 void NormalPageMemoryRegion::UnprotectForTesting() {
   for (size_t i = 0; i < kNumPageRegions; ++i) {
-    Unprotect(allocator_, oom_handler_, GetPageMemory(i));
+    CHECK(TryUnprotect(allocator_, GetPageMemory(i)));
   }
 }
 
-LargePageMemoryRegion::LargePageMemoryRegion(
-    PageAllocator& allocator, FatalOutOfMemoryHandler& oom_handler,
-    size_t length)
-    : PageMemoryRegion(
-          allocator, oom_handler,
-          ReserveMemoryRegion(allocator, oom_handler,
-                              RoundUp(length + 2 * kGuardPageSize,
-                                      allocator.AllocatePageSize())),
-          true) {}
+// static
+std::unique_ptr<LargePageMemoryRegion> LargePageMemoryRegion::Create(
+    PageAllocator& allocator, size_t length) {
+  const auto region = ReserveMemoryRegion(
+      allocator,
+      RoundUp(length + 2 * kGuardPageSize, allocator.AllocatePageSize()));
+  if (!region) return {};
+  auto result = std::unique_ptr<LargePageMemoryRegion>(
+      new LargePageMemoryRegion(allocator, *region));
+  return result;
+}
+
+LargePageMemoryRegion::LargePageMemoryRegion(PageAllocator& allocator,
+                                             MemoryRegion region)
+    : PageMemoryRegion(allocator, region, true) {}
 
 LargePageMemoryRegion::~LargePageMemoryRegion() = default;
 
 void LargePageMemoryRegion::UnprotectForTesting() {
-  Unprotect(allocator_, oom_handler_, GetPageMemory());
+  CHECK(TryUnprotect(allocator_, GetPageMemory()));
 }
 
 PageMemoryRegionTree::PageMemoryRegionTree() = default;
@@ -171,44 +176,47 @@ NormalPageMemoryPool::NormalPageMemoryPool() = default;
 
 NormalPageMemoryPool::~NormalPageMemoryPool() = default;
 
-void NormalPageMemoryPool::Add(size_t bucket, NormalPageMemoryRegion* pmr,
+void NormalPageMemoryPool::Add(NormalPageMemoryRegion* pmr,
                                Address writeable_base) {
-  DCHECK_LT(bucket, kNumPoolBuckets);
-  pool_[bucket].push_back(std::make_pair(pmr, writeable_base));
+  pool_.push_back(std::make_pair(pmr, writeable_base));
 }
 
-std::pair<NormalPageMemoryRegion*, Address> NormalPageMemoryPool::Take(
-    size_t bucket) {
-  DCHECK_LT(bucket, kNumPoolBuckets);
-  if (pool_[bucket].empty()) return {nullptr, nullptr};
-  std::pair<NormalPageMemoryRegion*, Address> pair = pool_[bucket].back();
-  pool_[bucket].pop_back();
+std::pair<NormalPageMemoryRegion*, Address> NormalPageMemoryPool::Take() {
+  if (pool_.empty()) return {nullptr, nullptr};
+  std::pair<NormalPageMemoryRegion*, Address> pair = pool_.back();
+  pool_.pop_back();
   return pair;
 }
 
-PageBackend::PageBackend(PageAllocator& allocator,
-                         FatalOutOfMemoryHandler& oom_handler)
-    : allocator_(allocator), oom_handler_(oom_handler) {}
+PageBackend::PageBackend(PageAllocator& normal_page_allocator,
+                         PageAllocator& large_page_allocator)
+    : normal_page_allocator_(normal_page_allocator),
+      large_page_allocator_(large_page_allocator) {}
 
 PageBackend::~PageBackend() = default;
 
-Address PageBackend::AllocateNormalPageMemory(size_t bucket) {
+Address PageBackend::TryAllocateNormalPageMemory() {
   v8::base::MutexGuard guard(&mutex_);
-  std::pair<NormalPageMemoryRegion*, Address> result = page_pool_.Take(bucket);
+  std::pair<NormalPageMemoryRegion*, Address> result = page_pool_.Take();
   if (!result.first) {
-    auto pmr =
-        std::make_unique<NormalPageMemoryRegion>(allocator_, oom_handler_);
+    auto pmr = NormalPageMemoryRegion::Create(normal_page_allocator_);
+    if (!pmr) {
+      return nullptr;
+    }
     for (size_t i = 0; i < NormalPageMemoryRegion::kNumPageRegions; ++i) {
-      page_pool_.Add(bucket, pmr.get(),
+      page_pool_.Add(pmr.get(),
                      pmr->GetPageMemory(i).writeable_region().base());
     }
     page_memory_region_tree_.Add(pmr.get());
     normal_page_memory_regions_.push_back(std::move(pmr));
-    result = page_pool_.Take(bucket);
+    result = page_pool_.Take();
     DCHECK(result.first);
   }
-  result.first->Allocate(result.second);
-  return result.second;
+  if (V8_LIKELY(result.first->TryAllocate(result.second))) {
+    return result.second;
+  }
+  page_pool_.Add(result.first, result.second);
+  return nullptr;
 }
 
 void PageBackend::FreeNormalPageMemory(size_t bucket, Address writeable_base) {
@@ -216,18 +224,23 @@ void PageBackend::FreeNormalPageMemory(size_t bucket, Address writeable_base) {
   auto* pmr = static_cast<NormalPageMemoryRegion*>(
       page_memory_region_tree_.Lookup(writeable_base));
   pmr->Free(writeable_base);
-  page_pool_.Add(bucket, pmr, writeable_base);
+  page_pool_.Add(pmr, writeable_base);
 }
 
-Address PageBackend::AllocateLargePageMemory(size_t size) {
+Address PageBackend::TryAllocateLargePageMemory(size_t size) {
   v8::base::MutexGuard guard(&mutex_);
-  auto pmr =
-      std::make_unique<LargePageMemoryRegion>(allocator_, oom_handler_, size);
+  auto pmr = LargePageMemoryRegion::Create(large_page_allocator_, size);
+  if (!pmr) {
+    return nullptr;
+  }
   const PageMemory pm = pmr->GetPageMemory();
-  Unprotect(allocator_, oom_handler_, pm);
-  page_memory_region_tree_.Add(pmr.get());
-  large_page_memory_regions_.insert(std::make_pair(pmr.get(), std::move(pmr)));
-  return pm.writeable_region().base();
+  if (V8_LIKELY(TryUnprotect(large_page_allocator_, pm))) {
+    page_memory_region_tree_.Add(pmr.get());
+    large_page_memory_regions_.insert(
+        std::make_pair(pmr.get(), std::move(pmr)));
+    return pm.writeable_region().base();
+  }
+  return nullptr;
 }
 
 void PageBackend::FreeLargePageMemory(Address writeable_base) {

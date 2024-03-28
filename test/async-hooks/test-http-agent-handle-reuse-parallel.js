@@ -21,7 +21,7 @@ let responses = 0;
 const agent = new http.Agent({
   keepAlive: true,
   keepAliveMsecs: Infinity,
-  maxSockets: 1
+  maxSockets: 1,
 });
 
 const verifyRequest = (idx) => (res) => {
@@ -34,7 +34,7 @@ const verifyRequest = (idx) => (res) => {
     socket = res.socket;
   }
 
-  res.on('data', common.mustCallAtLeast(() => {}));
+  res.on('data', common.mustCallAtLeast());
   res.on('end', common.mustCall(() => {
     if (++responses === 2) {
       // Clean up to let the event loop stop.
@@ -58,13 +58,13 @@ const server = http.createServer(common.mustCall((req, res) => {
 
   // First request.
   const r1 = http.request({
-    agent, port, method: 'POST'
+    agent, port, method: 'POST',
   }, common.mustCall(verifyRequest(0)));
   r1.end(payload);
 
   // Second request. Sent in parallel with the first one.
   const r2 = http.request({
-    agent, port, method: 'POST'
+    agent, port, method: 'POST',
   }, common.mustCall(verifyRequest(1)));
   r2.end(payload);
 }));
@@ -87,4 +87,6 @@ function onExit() {
   // Verify reuse handle has been wrapped
   assert.strictEqual(first.type, second.type);
   assert.ok(first.handle !== second.handle, 'Resource reused');
+  assert.ok(first.handle === second.handle.handle,
+            'Resource not wrapped correctly');
 }

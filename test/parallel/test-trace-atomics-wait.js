@@ -25,7 +25,7 @@ if (process.argv[2] === 'child') {
 
 const proc = child_process.spawnSync(
   process.execPath,
-  [ '--trace-atomics-wait', __filename, 'child' ],
+  [ '--disable-warning=DEP0165', '--trace-atomics-wait', __filename, 'child' ],
   { encoding: 'utf8', stdio: [ 'inherit', 'inherit', 'pipe' ] });
 
 if (proc.status !== 0) console.log(proc);
@@ -90,6 +90,12 @@ values mismatched
 [Thread 1] Atomics.wait(<address> + 4, -1, inf) started
 [Thread 1] Atomics.wait(<address> + 4, -1, inf) did not wait because the \
 values mismatched`,
+  `${begin}
+[Thread 1] Atomics.wait(<address> + 4, -1, inf) started
+[Thread 0] Atomics.wait(<address> + 4, 0, inf) started
+[Thread 0] Atomics.wait(<address> + 4, 0, inf) did not wait because the \
+values mismatched
+[Thread 1] Atomics.wait(<address> + 4, -1, inf) was woken up by another thread`,
 ];
 
 assert(expectedTimelines.includes(actualTimeline));

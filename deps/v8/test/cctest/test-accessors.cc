@@ -32,6 +32,7 @@
 #include "src/execution/frames-inl.h"
 #include "src/strings/string-stream.h"
 #include "test/cctest/cctest.h"
+#include "test/cctest/heap/heap-utils.h"
 
 using ::v8::ObjectTemplate;
 using ::v8::Value;
@@ -316,7 +317,7 @@ THREADED_TEST(HandleScopePop) {
   int count_before =
       i::HandleScope::NumberOfHandles(reinterpret_cast<i::Isolate*>(isolate));
   {
-    v8::HandleScope scope(isolate);
+    v8::HandleScope inner_scope(isolate);
     CompileRun(
         "for (var i = 0; i < 1000; i++) {"
         "  obj.one;"
@@ -342,8 +343,8 @@ static void CheckAccessorArgsCorrect(
   CHECK(info.Data()
             ->Equals(info.GetIsolate()->GetCurrentContext(), v8_str("data"))
             .FromJust());
-  CcTest::CollectAllGarbage();
   CHECK(info.GetIsolate() == CcTest::isolate());
+  i::heap::InvokeMajorGC(CcTest::heap());
   CHECK(info.This() == info.Holder());
   CHECK(info.Data()
             ->Equals(info.GetIsolate()->GetCurrentContext(), v8_str("data"))
@@ -533,9 +534,8 @@ static void StackCheck(Local<String> name,
   for (int i = 0; !iter.done(); i++) {
     i::StackFrame* frame = iter.frame();
     CHECK(i != 0 || (frame->type() == i::StackFrame::EXIT));
-    i::Code code = frame->LookupCode();
-    CHECK(code.IsCode());
-    CHECK(code.contains(isolate, frame->pc()));
+    i::Tagged<i::Code> code = frame->LookupCode();
+    CHECK(code->contains(isolate, frame->pc()));
     iter.Advance();
   }
 }
@@ -679,29 +679,25 @@ THREADED_TEST(GlobalObjectAccessor) {
   // JSGlobalProxy as a receiver regardless of the current IC state and
   // the order in which ICs are executed.
   for (int i = 0; i < 10; i++) {
-    CHECK(
-        v8::Utils::OpenHandle(*check_getter->Run(env.local()).ToLocalChecked())
-            ->IsJSGlobalProxy());
+    CHECK(IsJSGlobalProxy(*v8::Utils::OpenHandle(
+        *check_getter->Run(env.local()).ToLocalChecked())));
   }
   for (int i = 0; i < 10; i++) {
-    CHECK(
-        v8::Utils::OpenHandle(*check_setter->Run(env.local()).ToLocalChecked())
-            ->IsJSGlobalProxy());
+    CHECK(IsJSGlobalProxy(*v8::Utils::OpenHandle(
+        *check_setter->Run(env.local()).ToLocalChecked())));
   }
   for (int i = 0; i < 10; i++) {
-    CHECK(
-        v8::Utils::OpenHandle(*check_getter->Run(env.local()).ToLocalChecked())
-            ->IsJSGlobalProxy());
-    CHECK(
-        v8::Utils::OpenHandle(*check_setter->Run(env.local()).ToLocalChecked())
-            ->IsJSGlobalProxy());
+    CHECK(IsJSGlobalProxy(*v8::Utils::OpenHandle(
+        *check_getter->Run(env.local()).ToLocalChecked())));
+    CHECK(IsJSGlobalProxy(*v8::Utils::OpenHandle(
+        *check_setter->Run(env.local()).ToLocalChecked())));
   }
 }
 
 
 static void EmptyGetter(Local<Name> name,
                         const v8::PropertyCallbackInfo<v8::Value>& info) {
-  ApiTestFuzzer::Fuzz();
+  // The request is not intercepted so don't call ApiTestFuzzer::Fuzz() here.
 }
 
 
@@ -739,7 +735,7 @@ static bool SecurityTestCallback(Local<v8::Context> accessing_context,
 
 
 TEST(PrototypeGetterAccessCheck) {
-  i::FLAG_allow_natives_syntax = true;
+  i::v8_flags.allow_natives_syntax = true;
   LocalContext env;
   v8::Isolate* isolate = env->GetIsolate();
   v8::HandleScope scope(isolate);
@@ -906,7 +902,7 @@ TEST(ObjectSetLazyDataPropertyForIndex) {
 }
 
 TEST(ObjectTemplateSetLazyPropertySurvivesIC) {
-  i::FLAG_allow_natives_syntax = true;
+  i::v8_flags.allow_natives_syntax = true;
   LocalContext env;
   v8::Isolate* isolate = env->GetIsolate();
   v8::HandleScope scope(isolate);

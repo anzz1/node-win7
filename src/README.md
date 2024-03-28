@@ -1,6 +1,6 @@
 # Node.js C++ codebase
 
-Hi! 👋 You’ve found the C++ code backing Node.js. This README aims to help you
+Hi! 👋 You've found the C++ code backing Node.js. This README aims to help you
 get started working on it and document some idioms you may encounter while
 doing so.
 
@@ -20,9 +20,9 @@ V8 does not provide much public API documentation beyond what is
 available in its C++ header files, most importantly `v8.h`, which can be
 accessed online in the following locations:
 
-* On GitHub: [`v8.h` in Node.js master][]
-* On GitHub: [`v8.h` in V8 master][]
-* On the Chromium project’s Code Search application: [`v8.h` in Code Search][]
+* On GitHub: [`v8.h` in Node.js][]
+* On GitHub: [`v8.h` in V8][]
+* On the Chromium project's Code Search application: [`v8.h` in Code Search][]
 
 V8 also provides an [introduction for V8 embedders][],
 which can be useful for understanding some of the concepts it uses in its
@@ -31,10 +31,13 @@ embedder API.
 Important concepts when using V8 are the ones of [`Isolate`][]s and
 [JavaScript value handles][].
 
+V8 supports [fast API calls][], which can be useful for improving the
+performance in certain cases.
+
 ## libuv API documentation
 
 The other major dependency of Node.js is [libuv][], providing
-the [event loop][] and other operation system abstractions to Node.js.
+the [event loop][] and other operating system abstractions to Node.js.
 
 There is a [reference documentation for the libuv API][].
 
@@ -42,7 +45,7 @@ There is a [reference documentation for the libuv API][].
 
 The Node.js C++ files follow this structure:
 
-The `.h` header files contain declarations, and sometimes definitions that don’t
+The `.h` header files contain declarations, and sometimes definitions that don't
 require including other headers (e.g. getters, setters, etc.). They should only
 include other `.h` header files and nothing else.
 
@@ -93,6 +96,7 @@ Typical ways of accessing the current `Isolate` in the Node.js code are:
   using `args.GetIsolate()`.
 * Given a [`Context`][], using `context->GetIsolate()`.
 * Given a [`Environment`][], using `env->isolate()`.
+* Given a [`Realm`][], using `realm->isolate()`.
 
 ### V8 JavaScript values
 
@@ -261,19 +265,25 @@ heap. Node.js exposes this ability through the [`vm` module][].
 V8 refers to each of these global objects and their associated builtins as a
 `Context`.
 
-Currently, in Node.js there is one main `Context` associated with an
-[`Environment`][] instance, and most Node.js features will only work inside
-that context. (The only exception at the time of writing are
-[`MessagePort`][] objects.) This restriction is not inherent to the design of
-Node.js, and a sufficiently committed person could restructure Node.js to
-provide built-in modules inside of `vm.Context`s.
+Currently, in Node.js there is one main `Context` associated with the
+principal [`Realm`][] of an [`Environment`][] instance, and a number of
+subsidiary `Context`s that are created with `vm.Context` or associated with
+[`ShadowRealm`][].
+
+Most Node.js features will only work inside a context associated with a
+`Realm`. The only exception at the time of writing are [`MessagePort`][]
+objects. This restriction is not inherent to the design of Node.js, and a
+sufficiently committed person could restructure Node.js to provide built-in
+modules inside of `vm.Context`s.
 
 Often, the `Context` is passed around for [exception handling][].
 Typical ways of accessing the current `Context` in the Node.js code are:
 
 * Given an [`Isolate`][], using `isolate->GetCurrentContext()`.
-* Given an [`Environment`][], using `env->context()` to get the `Environment`’s
-  main context.
+* Given an [`Environment`][], using `env->context()` to get the `Environment`'s
+  principal [`Realm`][]'s context.
+* Given a [`Realm`][], using `realm->context()` to get the `Realm`'s
+  context.
 
 <a id="event-loop"></a>
 
@@ -288,7 +298,7 @@ The current event loop can be accessed using `env->event_loop()` given an
 [`Environment`][] instance. The restriction of using a single event loop
 is not inherent to the design of Node.js, and a sufficiently committed person
 could restructure Node.js to provide e.g. the ability to run parts of Node.js
-inside an event loop separate from the active thread’s event loop.
+inside an event loop separate from the active thread's event loop.
 
 <a id="environment"></a>
 
@@ -300,15 +310,11 @@ Currently, every `Environment` class is associated with:
 
 * One [event loop][]
 * One [`Isolate`][]
-* One main [`Context`][]
+* One principal [`Realm`][]
 
 The `Environment` class contains a large number of different fields for
-different Node.js modules, for example a libuv timer for `setTimeout()` or
-the memory for a `Float64Array` that the `fs` module uses for storing data
-returned from a `fs.stat()` call.
-
-It also provides [cleanup hooks][] and maintains a list of [`BaseObject`][]
-instances.
+different built-in modules that can be shared across different `Realm`
+instances, for example, the inspector agent, async hooks info.
 
 Typical ways of accessing the current `Environment` in the Node.js code are:
 
@@ -321,6 +327,45 @@ Typical ways of accessing the current `Environment` in the Node.js code are:
   `vm.Context`s.
 * Given an [`Isolate`][], using `Environment::GetCurrent(isolate)`. This looks
   up the current [`Context`][] and then uses that.
+
+<a id="realm"></a>
+
+### `Realm`
+
+The `Realm` class is a container for a set of JavaScript objects and functions
+that are associated with a particular [ECMAScript realm][].
+
+Each ECMAScript realm comes with a global object and a set of intrinsic
+objects. An ECMAScript realm has a `[[HostDefined]]` field, which represents
+the Node.js [`Realm`][] object.
+
+Every `Realm` instance is created for a particular [`Context`][]. A `Realm`
+can be a principal realm or a synthetic realm. A principal realm is created
+for each `Environment`'s main [`Context`][]. A synthetic realm is created
+for the [`Context`][] of each [`ShadowRealm`][] constructed from the JS API. No
+`Realm` is created for the [`Context`][] of a `vm.Context`.
+
+Native bindings and built-in modules can be evaluated in either a principal
+realm or a synthetic realm.
+
+The `Realm` class contains a large number of different fields for
+different built-in modules, for example the memory for a `Uint32Array` that
+the `url` module uses for storing data returned from a
+`urlBinding.update()` call.
+
+It also provides [cleanup hooks][] and maintains a list of [`BaseObject`][]
+instances.
+
+Typical ways of accessing the current `Realm` in the Node.js code are:
+
+* Given a `FunctionCallbackInfo` for a [binding function][],
+  using `Realm::GetCurrent(args)`.
+* Given a [`BaseObject`][], using `realm()` or `self->realm()`.
+* Given a [`Context`][], using `Realm::GetCurrent(context)`.
+  This requires that `context` has been associated with the `Realm`
+  instance, e.g. is the principal `Realm` for the `Environment`.
+* Given an [`Isolate`][], using `Realm::GetCurrent(isolate)`. This looks
+  up the current [`Context`][] and then uses its `Realm`.
 
 <a id="isolate-data"></a>
 
@@ -351,7 +396,7 @@ The platform can be accessed through `isolate_data->platform()` given an
 
 * The current Node.js instance was not started by an embedder; or
 * The current Node.js instance was started by an embedder whose `v8::Platform`
-  implementation also implement’s the `node::MultiIsolatePlatform` interface
+  implementation also implement's the `node::MultiIsolatePlatform` interface
   and who passed this to Node.js.
 
 <a id="binding-functions"></a>
@@ -390,37 +435,38 @@ void Initialize(Local<Object> target,
                 void* priv) {
   Environment* env = Environment::GetCurrent(context);
 
-  env->SetMethod(target, "getaddrinfo", GetAddrInfo);
-  env->SetMethod(target, "getnameinfo", GetNameInfo);
+  SetMethod(context, target, "getaddrinfo", GetAddrInfo);
+  SetMethod(context, target, "getnameinfo", GetNameInfo);
 
   // 'SetMethodNoSideEffect' means that debuggers can safely execute this
   // function for e.g. previews.
-  env->SetMethodNoSideEffect(target, "canonicalizeIP", CanonicalizeIP);
+  SetMethodNoSideEffect(context, target, "canonicalizeIP", CanonicalizeIP);
 
   // ... more code ...
 
+  Isolate* isolate = env->isolate();
   // Building the `ChannelWrap` class for JS:
   Local<FunctionTemplate> channel_wrap =
-      env->NewFunctionTemplate(ChannelWrap::New);
+      NewFunctionTemplate(isolate, ChannelWrap::New);
   // Allow for 1 internal field, see `BaseObject` for details on this:
   channel_wrap->InstanceTemplate()->SetInternalFieldCount(1);
   channel_wrap->Inherit(AsyncWrap::GetConstructorTemplate(env));
 
   // Set various methods on the class (i.e. on the prototype):
-  env->SetProtoMethod(channel_wrap, "queryAny", Query<QueryAnyWrap>);
-  env->SetProtoMethod(channel_wrap, "queryA", Query<QueryAWrap>);
+  SetProtoMethod(isolate, channel_wrap, "queryAny", Query<QueryAnyWrap>);
+  SetProtoMethod(isolate, channel_wrap, "queryA", Query<QueryAWrap>);
   // ...
-  env->SetProtoMethod(channel_wrap, "querySoa", Query<QuerySoaWrap>);
-  env->SetProtoMethod(channel_wrap, "getHostByAddr", Query<GetHostByAddrWrap>);
+  SetProtoMethod(isolate, channel_wrap, "querySoa", Query<QuerySoaWrap>);
+  SetProtoMethod(isolate, channel_wrap, "getHostByAddr", Query<GetHostByAddrWrap>);
 
-  env->SetProtoMethodNoSideEffect(channel_wrap, "getServers", GetServers);
+  SetProtoMethodNoSideEffect(isolate, channel_wrap, "getServers", GetServers);
 
-  env->SetConstructorFunction(target, "ChannelWrap", channel_wrap);
+  SetConstructorFunction(context, target, "ChannelWrap", channel_wrap);
 }
 
-// Run the `Initialize` function when loading this module through
-// `internalBinding('cares_wrap')` in Node.js’s built-in JavaScript code:
-NODE_MODULE_CONTEXT_AWARE_INTERNAL(cares_wrap, Initialize)
+// Run the `Initialize` function when loading this binding through
+// `internalBinding('cares_wrap')` in Node.js's built-in JavaScript code:
+NODE_BINDING_CONTEXT_AWARE_INTERNAL(cares_wrap, Initialize)
 ```
 
 If the C++ binding is loaded during bootstrap, it needs to be registered
@@ -428,7 +474,7 @@ with the utilities in `node_external_reference.h`, like this:
 
 ```cpp
 namespace node {
-namespace utils {
+namespace util {
 void RegisterExternalReferences(ExternalReferenceRegistry* registry) {
   registry->Register(GetHiddenValue);
   registry->Register(SetHiddenValue);
@@ -437,10 +483,10 @@ void RegisterExternalReferences(ExternalReferenceRegistry* registry) {
 }  // namespace util
 }  // namespace node
 
-// The first argument passed to `NODE_MODULE_EXTERNAL_REFERENCE`,
+// The first argument passed to `NODE_BINDING_EXTERNAL_REFERENCE`,
 // which is `util` here, needs to be added to the
 // `EXTERNAL_REFERENCE_BINDING_LIST_BASE` list in node_external_reference.h
-NODE_MODULE_EXTERNAL_REFERENCE(util, node::util::RegisterExternalReferences)
+NODE_BINDING_EXTERNAL_REFERENCE(util, node::util::RegisterExternalReferences)
 ```
 
 Otherwise, you might see an error message like this when building the
@@ -478,22 +524,36 @@ Which explains that the unregistered external reference is
 
 Some internal bindings, such as the HTTP parser, maintain internal state that
 only affects that particular binding. In that case, one common way to store
-that state is through the use of `Environment::AddBindingData`, which gives
+that state is through the use of `Realm::AddBindingData`, which gives
 binding functions access to an object for storing such state.
 That object is always a [`BaseObject`][].
 
-Its class needs to have a static `type_name` field based on a
-constant string, in order to disambiguate it from other classes of this type,
-and which could e.g. match the binding’s name (in the example above, that would
-be `cares_wrap`).
+In the binding, call `SET_BINDING_ID()` with an identifier for the binding
+type. For example, for `http_parser::BindingData`, the identifier can be
+`http_parser_binding_data`.
+
+If the binding should be supported in a snapshot, the id and the
+fully-specified class name should be added to the `SERIALIZABLE_BINDING_TYPES`
+list in `base_object_types.h`, and the class should implement the serialization
+and deserialization methods. See the comments of `SnapshotableObject` on how to
+implement them. Otherwise, add the id and the class name to the
+`UNSERIALIZABLE_BINDING_TYPES` list instead.
 
 ```cpp
+// In base_object_types.h, add the binding to either
+// UNSERIALIZABLE_BINDING_TYPES or SERIALIZABLE_BINDING_TYPES.
+// The second parameter is a descriptive name of the class, which is
+// usually the fully-specified class name.
+
+#define UNSERIALIZABLE_BINDING_TYPES(V)                                         \
+  V(http_parser_binding_data, http_parser::BindingData)
+
 // In the HTTP parser source code file:
 class BindingData : public BaseObject {
  public:
-  BindingData(Environment* env, Local<Object> obj) : BaseObject(env, obj) {}
+  BindingData(Realm* realm, Local<Object> obj) : BaseObject(realm, obj) {}
 
-  static constexpr FastStringKey type_name { "http_parser" };
+  SET_BINDING_ID(http_parser_binding_data)
 
   std::vector<char> parser_buffer;
   bool parser_buffer_in_use = false;
@@ -503,31 +563,24 @@ class BindingData : public BaseObject {
 
 // Available for binding functions, e.g. the HTTP Parser constructor:
 static void New(const FunctionCallbackInfo<Value>& args) {
-  BindingData* binding_data = Environment::GetBindingData<BindingData>(args);
+  BindingData* binding_data = Realm::GetBindingData<BindingData>(args);
   new Parser(binding_data, args.This());
 }
 
-// ... because the initialization function told the Environment to store the
+// ... because the initialization function told the Realm to store the
 // BindingData object:
 void InitializeHttpParser(Local<Object> target,
                           Local<Value> unused,
                           Local<Context> context,
                           void* priv) {
-  Environment* env = Environment::GetCurrent(context);
-  BindingData* const binding_data =
-      env->AddBindingData<BindingData>(context, target);
+  Realm* realm = Realm::GetCurrent(context);
+  BindingData* const binding_data = realm->AddBindingData<BindingData>(target);
   if (binding_data == nullptr) return;
 
-  Local<FunctionTemplate> t = env->NewFunctionTemplate(Parser::New);
+  Local<FunctionTemplate> t = NewFunctionTemplate(realm->isolate(), Parser::New);
   ...
 }
 ```
-
-If the binding is loaded during bootstrap, add it to the
-`SERIALIZABLE_OBJECT_TYPES` list in `src/node_snapshotable.h` and
-inherit from the `SnapshotableObject` class instead. See the comments
-of `SnapshotableObject` on how to implement its serialization and
-deserialization.
 
 <a id="exception-handling"></a>
 
@@ -556,7 +609,7 @@ the process otherwise. `maybe.FromJust()` (aka `maybe.ToChecked()`) can be used
 to access the value and crash the process if it is not set.
 
 This should only be performed if it is actually sure that the operation has
-not failed. A lot of Node.js’s source code does **not** follow this rule, and
+not failed. A lot of the Node.js source code does **not** follow this rule, and
 can be brought to crash through this.
 
 In particular, it is often not safe to assume that an operation does not throw
@@ -619,20 +672,20 @@ v8::Maybe<double> SumNumbers(v8::Local<v8::Context> context,
 
   for (uint32_t i = 0; i < array_of_integers->Length(); i++) {
     v8::Local<v8::Value> entry;
-    if (array_of_integers->Get(context, i).ToLocal(&entry)) {
+    if (!array_of_integers->Get(context, i).ToLocal(&entry)) {
       // Oops, we might have hit a getter that throws an exception!
-      // It’s better to not continue return an empty (“nothing”) Maybe.
+      // It's better to not continue return an empty (“nothing”) Maybe.
       return v8::Nothing<double>();
     }
 
     if (!entry->IsNumber()) {
-      // Let’s just skip any non-numbers. It would also be reasonable to throw
+      // Let's just skip any non-numbers. It would also be reasonable to throw
       // an exception here, e.g. using the error system in src/node_errors.h,
       // and then to return an empty Maybe again.
       continue;
     }
 
-    // This cast is valid, because we’ve made sure it’s really a number.
+    // This cast is valid, because we've made sure it's really a number.
     v8::Local<v8::Number> entry_as_number = entry.As<v8::Number>();
 
     sum += entry_as_number->Value();
@@ -643,7 +696,7 @@ v8::Maybe<double> SumNumbers(v8::Local<v8::Context> context,
 
 // Function that is exposed to JS:
 void SumNumbers(const v8::FunctionCallbackInfo<v8::Value>& args) {
-  // This will crash if the first argument is not an array. Let’s assume we
+  // This will crash if the first argument is not an array. Let's assume we
   // have performed type checking in a JavaScript wrapper function.
   CHECK(args[0]->IsArray());
 
@@ -698,11 +751,13 @@ any resources owned by it, e.g. memory or libuv requests/handles.
 
 #### Cleanup hooks
 
-Cleanup hooks are provided that run before the [`Environment`][]
-is destroyed. They can be added and removed through by using
+Cleanup hooks are provided that run before the [`Environment`][] or the
+[`Realm`][] is destroyed. They can be added and removed by using
 `env->AddCleanupHook(callback, hint);` and
-`env->RemoveCleanupHook(callback, hint);`, where callback takes a `void* hint`
-argument.
+`env->RemoveCleanupHook(callback, hint);`, or
+`realm->AddCleanupHook(callback, hint);` and
+`realm->RemoveCleanupHook(callback, hint);` respectively, where callback takes
+a `void* hint` argument.
 
 Inside these cleanup hooks, new asynchronous operations _may_ be started on the
 event loop, although ideally that is avoided as much as possible.
@@ -764,7 +819,7 @@ need to be tied together. `BaseObject` is the main abstraction for that in
 Node.js, and most classes that are associated with JavaScript objects are
 subclasses of it. It is defined in [`base_object.h`][].
 
-Every `BaseObject` is associated with one [`Environment`][] and one
+Every `BaseObject` is associated with one [`Realm`][] and one
 `v8::Object`. The `v8::Object` needs to have at least one [internal field][]
 that is used for storing the pointer to the C++ object. In order to ensure this,
 the V8 `SetInternalFieldCount()` function is usually used when setting up the
@@ -859,7 +914,7 @@ this information is provided to async tracking tools.
 The `AsyncWrap` class has a set of methods called `MakeCallback()`, with the
 intention of the naming being that it is used to “make calls back into
 JavaScript” from the event loop, rather than making callbacks in some way.
-(As the naming has made its way into Node.js’s public API, it’s not worth
+(As the naming has made its way into the Node.js public API, it's not worth
 the breakage of fixing it).
 
 `MakeCallback()` generally calls a method on the JavaScript object associated
@@ -936,7 +991,7 @@ classes provide the same facilities as [`MakeCallback()`][], namely:
 
 Usually, using `AsyncWrap::MakeCallback()` or using the constructor taking
 an `AsyncWrap*` argument (i.e. used as
-`InternalCallbackScope callback_scope(this);`) suffices inside of Node.js’s
+`InternalCallbackScope callback_scope(this);`) suffices inside of the Node.js
 C++ codebase.
 
 ## C++ utilities
@@ -1024,8 +1079,9 @@ static void GetUserInfo(const FunctionCallbackInfo<Value>& args) {
 }
 ```
 
-[C++ coding style]: ../doc/guides/cpp-style-guide.md
+[C++ coding style]: ../doc/contributing/cpp-style-guide.md
 [Callback scopes]: #callback-scopes
+[ECMAScript realm]: https://tc39.es/ecma262/#sec-code-realms
 [JavaScript value handles]: #js-handles
 [N-API]: https://nodejs.org/api/n-api.html
 [`BaseObject`]: #baseobject
@@ -1038,7 +1094,9 @@ static void GetUserInfo(const FunctionCallbackInfo<Value>& args) {
 [`Local`]: #local-handles
 [`MakeCallback()`]: #makecallback
 [`MessagePort`]: https://nodejs.org/api/worker_threads.html#worker_threads_class_messageport
+[`Realm`]: #realm
 [`ReqWrap`]: #reqwrap
+[`ShadowRealm`]: https://github.com/tc39/proposal-shadowrealm
 [`async_hooks` module]: https://nodejs.org/api/async_hooks.html
 [`async_wrap.h`]: async_wrap.h
 [`base_object.h`]: base_object.h
@@ -1047,13 +1105,14 @@ static void GetUserInfo(const FunctionCallbackInfo<Value>& args) {
 [`req_wrap.h`]: req_wrap.h
 [`util.h`]: util.h
 [`v8.h` in Code Search]: https://cs.chromium.org/chromium/src/v8/include/v8.h
-[`v8.h` in Node.js master]: https://github.com/nodejs/node/blob/master/deps/v8/include/v8.h
-[`v8.h` in V8 master]: https://github.com/v8/v8/blob/master/include/v8.h
+[`v8.h` in Node.js]: https://github.com/nodejs/node/blob/HEAD/deps/v8/include/v8.h
+[`v8.h` in V8]: https://github.com/v8/v8/blob/HEAD/include/v8.h
 [`vm` module]: https://nodejs.org/api/vm.html
 [binding function]: #binding-functions
 [cleanup hooks]: #cleanup-hooks
 [event loop]: #event-loop
 [exception handling]: #exception-handling
+[fast API calls]: ../doc/contributing/adding-v8-fast-api.md
 [internal field]: #internal-fields
 [introduction for V8 embedders]: https://v8.dev/docs/embed
 [libuv]: https://libuv.org/

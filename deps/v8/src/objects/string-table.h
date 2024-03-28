@@ -47,8 +47,8 @@ class SeqOneByteString;
 // StringTable::Data for details.
 class V8_EXPORT_PRIVATE StringTable {
  public:
-  static constexpr Smi empty_element() { return Smi::FromInt(0); }
-  static constexpr Smi deleted_element() { return Smi::FromInt(1); }
+  static constexpr Tagged<Smi> empty_element() { return Smi::FromInt(0); }
+  static constexpr Tagged<Smi> deleted_element() { return Smi::FromInt(1); }
 
   explicit StringTable(Isolate* isolate);
   ~StringTable();
@@ -72,6 +72,10 @@ class V8_EXPORT_PRIVATE StringTable {
   static Address TryStringToIndexOrLookupExisting(Isolate* isolate,
                                                   Address raw_string);
 
+  // Insert a range of strings. Only for use during isolate deserialization.
+  void InsertForIsolateDeserialization(
+      Isolate* isolate, const std::vector<Handle<String>>& strings);
+
   void Print(PtrComprCageBase cage_base) const;
   size_t GetCurrentMemoryUsage() const;
 
@@ -80,6 +84,8 @@ class V8_EXPORT_PRIVATE StringTable {
   void IterateElements(RootVisitor* visitor);
   void DropOldData();
   void NotifyElementsRemoved(int count);
+
+  void VerifyIfOwnedBy(Isolate* isolate);
 
  private:
   class Data;
@@ -90,9 +96,7 @@ class V8_EXPORT_PRIVATE StringTable {
   // Write mutex is mutable so that readers of concurrently mutated values (e.g.
   // NumberOfElements) are allowed to lock it while staying const.
   mutable base::Mutex write_mutex_;
-#ifdef DEBUG
   Isolate* isolate_;
-#endif
 };
 
 }  // namespace internal

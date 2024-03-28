@@ -3,10 +3,9 @@
 
 #if defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 
+#include "base_object.h"
 #include "crypto/crypto_keys.h"
 #include "crypto/crypto_util.h"
-#include "allocated_buffer.h"
-#include "base_object.h"
 #include "env.h"
 #include "memory_tracker.h"
 
@@ -21,7 +20,7 @@ enum DSASigEnc {
 
 class SignBase : public BaseObject {
  public:
-  typedef enum {
+  enum Error {
     kSignOk,
     kSignUnknownDigest,
     kSignInit,
@@ -30,7 +29,7 @@ class SignBase : public BaseObject {
     kSignPrivateKey,
     kSignPublicKey,
     kSignMalformedSignature
-  } Error;
+  };
 
   SignBase(Environment* env, v8::Local<v8::Object> wrap);
 
@@ -43,7 +42,7 @@ class SignBase : public BaseObject {
   SET_SELF_SIZE(SignBase)
 
  protected:
-  EVPMDPointer mdctx_;
+  EVPMDCtxPointer mdctx_;
 };
 
 class Sign : public SignBase {
@@ -53,11 +52,11 @@ class Sign : public SignBase {
 
   struct SignResult {
     Error error;
-    AllocatedBuffer signature;
+    std::unique_ptr<v8::BackingStore> signature;
 
     explicit SignResult(
         Error err,
-        AllocatedBuffer&& sig = AllocatedBuffer())
+        std::unique_ptr<v8::BackingStore>&& sig = nullptr)
       : error(err), signature(std::move(sig)) {}
   };
 

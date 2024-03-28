@@ -10,7 +10,6 @@
 #include "src/objects/js-objects.h"
 #include "src/objects/objects.h"
 #include "src/objects/struct.h"
-#include "torque-generated/field-offsets.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -18,14 +17,10 @@
 namespace v8 {
 namespace internal {
 
-template <typename T>
-class Handle;
-class Isolate;
 class JSModuleNamespace;
 class SourceTextModuleDescriptor;
 class SourceTextModuleInfo;
 class SourceTextModuleInfoEntry;
-class String;
 class Zone;
 
 #include "torque-generated/src/objects/module-tq.inc"
@@ -52,7 +47,7 @@ class Module : public TorqueGeneratedModule<Module, HeapObject> {
   };
 
   // The exception in the case {status} is kErrored.
-  Object GetException();
+  Tagged<Object> GetException();
 
   // Returns if this module or any transitively requested module is [[Async]],
   // i.e. has a top-level await.
@@ -117,24 +112,14 @@ class Module : public TorqueGeneratedModule<Module, HeapObject> {
       ZoneForwardList<Handle<SourceTextModule>>* stack, unsigned* dfs_index,
       Zone* zone);
 
-  static V8_WARN_UNUSED_RESULT MaybeHandle<Object> EvaluateMaybeAsync(
-      Isolate* isolate, Handle<Module> module);
-
-  static V8_WARN_UNUSED_RESULT MaybeHandle<Object> InnerEvaluate(
-      Isolate* isolate, Handle<Module> module);
-
   // Set module's status back to kUnlinked and reset other internal state.
   // This is used when instantiation fails.
   static void Reset(Isolate* isolate, Handle<Module> module);
   static void ResetGraph(Isolate* isolate, Handle<Module> module);
 
-  // To set status to kErrored, RecordError or RecordErrorUsingPendingException
-  // should be used.
+  // To set status to kErrored, RecordError should be used.
   void SetStatus(Status status);
-  static void RecordErrorUsingPendingException(Isolate* isolate,
-                                               Handle<Module>);
-  static void RecordError(Isolate* isolate, Handle<Module> module,
-                          Handle<Object> error);
+  void RecordError(Isolate* isolate, Tagged<Object> error);
 
   TQ_OBJECT_CONSTRUCTORS(Module)
 };
@@ -154,11 +139,17 @@ class JSModuleNamespace
   V8_WARN_UNUSED_RESULT MaybeHandle<Object> GetExport(Isolate* isolate,
                                                       Handle<String> name);
 
+  bool HasExport(Isolate* isolate, Handle<String> name);
+
   // Return the (constant) property attributes for the referenced property,
   // which is assumed to correspond to an export. If the export is
   // uninitialized, schedule an exception and return Nothing.
   static V8_WARN_UNUSED_RESULT Maybe<PropertyAttributes> GetPropertyAttributes(
       LookupIterator* it);
+
+  static V8_WARN_UNUSED_RESULT Maybe<bool> DefineOwnProperty(
+      Isolate* isolate, Handle<JSModuleNamespace> o, Handle<Object> key,
+      PropertyDescriptor* desc, Maybe<ShouldThrow> should_throw);
 
   // In-object fields.
   enum {
@@ -172,6 +163,16 @@ class JSModuleNamespace
       kHeaderSize + (kTaggedSize * kInObjectFieldCount);
 
   TQ_OBJECT_CONSTRUCTORS(JSModuleNamespace)
+};
+
+class ScriptOrModule
+    : public TorqueGeneratedScriptOrModule<ScriptOrModule, Struct> {
+ public:
+  DECL_PRINTER(ScriptOrModule)
+
+  using BodyDescriptor = StructBodyDescriptor;
+
+  TQ_OBJECT_CONSTRUCTORS(ScriptOrModule)
 };
 
 }  // namespace internal

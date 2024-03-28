@@ -105,7 +105,6 @@ std::vector<std::string> CCGenerator::ProcessArgumentsCommon(
   std::vector<std::string> args;
   for (auto it = parameter_types.rbegin(); it != parameter_types.rend(); ++it) {
     const Type* type = *it;
-    VisitResult arg;
     if (type->IsConstexpr()) {
       args.push_back(std::move(constexpr_arguments.back()));
       constexpr_arguments.pop_back();
@@ -329,10 +328,9 @@ void CCGenerator::EmitInstruction(const ReturnInstruction& instruction,
   ReportError("Not supported in C++ output: Return");
 }
 
-void CCGenerator::EmitInstruction(
-    const PrintConstantStringInstruction& instruction,
-    Stack<std::string>* stack) {
-  out() << "  std::cout << " << StringLiteralQuote(instruction.message)
+void CCGenerator::EmitInstruction(const PrintErrorInstruction& instruction,
+                                  Stack<std::string>* stack) {
+  out() << "  std::cerr << " << StringLiteralQuote(instruction.message)
         << ";\n";
 }
 
@@ -400,10 +398,10 @@ void CCGenerator::EmitInstruction(const LoadReferenceInstruction& instruction,
       // HeapObject|TaggedZeroPattern, which is output as "Object". TaggedField
       // requires HeapObject, so we need a cast.
       out() << "TaggedField<" << result_type
-            << ">::load(*static_cast<HeapObject*>(&" << object
+            << ">::load(Tagged<HeapObject>::unchecked_cast(" << object
             << "), static_cast<int>(" << offset << "));\n";
     } else {
-      out() << "(" << object << ").ReadField<" << result_type << ">(" << offset
+      out() << "(" << object << ")->ReadField<" << result_type << ">(" << offset
             << ");\n";
     }
   } else {

@@ -397,21 +397,24 @@ class TextNode : public SeqRegExpNode {
   TextNode(ZoneList<TextElement>* elms, bool read_backward,
            RegExpNode* on_success)
       : SeqRegExpNode(on_success), elms_(elms), read_backward_(read_backward) {}
-  TextNode(RegExpCharacterClass* that, bool read_backward,
-           RegExpNode* on_success)
+  TextNode(RegExpClassRanges* that, bool read_backward, RegExpNode* on_success)
       : SeqRegExpNode(on_success),
         elms_(zone()->New<ZoneList<TextElement>>(1, zone())),
         read_backward_(read_backward) {
-    elms_->Add(TextElement::CharClass(that), zone());
+    elms_->Add(TextElement::ClassRanges(that), zone());
   }
   // Create TextNode for a single character class for the given ranges.
   static TextNode* CreateForCharacterRanges(Zone* zone,
                                             ZoneList<CharacterRange>* ranges,
                                             bool read_backward,
                                             RegExpNode* on_success);
-  // Create TextNode for a surrogate pair with a range given for the
-  // lead and the trail surrogate each.
-  static TextNode* CreateForSurrogatePair(Zone* zone, CharacterRange lead,
+  // Create TextNode for a surrogate pair (i.e. match a sequence of two uc16
+  // code unit ranges).
+  static TextNode* CreateForSurrogatePair(
+      Zone* zone, CharacterRange lead, ZoneList<CharacterRange>* trail_ranges,
+      bool read_backward, RegExpNode* on_success);
+  static TextNode* CreateForSurrogatePair(Zone* zone,
+                                          ZoneList<CharacterRange>* lead_ranges,
                                           CharacterRange trail,
                                           bool read_backward,
                                           RegExpNode* on_success);

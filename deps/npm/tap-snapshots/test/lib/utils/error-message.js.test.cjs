@@ -157,10 +157,6 @@ Object {
     ],
     Array [
       "404",
-      "You should bug the author to publish it (or use the name yourself!)",
-    ],
-    Array [
-      "404",
       String(
         
         Note that you can also install from a
@@ -194,7 +190,7 @@ Object {
       "r",
       "g",
       "s",
-      "https://evil:***@npmjs.org",
+      "https://evil:***@npmjs.org/",
     ],
     Array [
       "",
@@ -214,7 +210,7 @@ Object {
 }
 `
 
-exports[`test/lib/utils/error-message.js TAP bad engine with config loaded > must match snapshot 1`] = `
+exports[`test/lib/utils/error-message.js TAP bad engine without config loaded > must match snapshot 1`] = `
 Object {
   "detail": Array [
     Array [
@@ -222,7 +218,7 @@ Object {
       String(
         Not compatible with your version of node/npm: some@package
         Required: undefined
-        Actual:   {"npm":"123.69.420-npm","node":"99.99.99"}
+        Actual:   {"npm":"123.456.789-npm","node":"123.456.789-node"}
       ),
     ],
   ],
@@ -245,17 +241,37 @@ Object {
     Array [
       "notsup",
       String(
-        Valid OS:    !yours,mine
-        Valid Arch:  x420,x69
-        Actual OS:   posix
-        Actual Arch: x64
+        Valid os:   !yours,mine
+        Actual os:  posix
+        Valid cpu:  x867,x5309
+        Actual cpu: x64
       ),
     ],
   ],
   "summary": Array [
     Array [
       "notsup",
-      "Unsupported platform for lodash@1.0.0: wanted {\\"os\\":\\"!yours,mine\\",\\"arch\\":\\"x420,x69\\"} (current: {\\"os\\":\\"posix\\",\\"arch\\":\\"x64\\"})",
+      "Unsupported platform for lodash@1.0.0: wanted {/"os/":/"!yours,mine/",/"cpu/":/"x867,x5309/"} (current: {/"os/":/"posix/",/"cpu/":/"x64/"})",
+    ],
+  ],
+}
+`
+
+exports[`test/lib/utils/error-message.js TAP bad platform omits keys with no required value > must match snapshot 1`] = `
+Object {
+  "detail": Array [
+    Array [
+      "notsup",
+      String(
+        Valid os:  !yours,mine
+        Actual os: posix
+      ),
+    ],
+  ],
+  "summary": Array [
+    Array [
+      "notsup",
+      "Unsupported platform for lodash@1.0.0: wanted {/"os/":/"!yours,mine/"} (current: {/"os/":/"posix/"})",
     ],
   ],
 }
@@ -267,17 +283,17 @@ Object {
     Array [
       "notsup",
       String(
-        Valid OS:    !yours
-        Valid Arch:  x420
-        Actual OS:   posix
-        Actual Arch: x64
+        Valid os:   !yours
+        Actual os:  posix
+        Valid cpu:  x420
+        Actual cpu: x64
       ),
     ],
   ],
   "summary": Array [
     Array [
       "notsup",
-      "Unsupported platform for lodash@1.0.0: wanted {\\"os\\":\\"!yours\\",\\"arch\\":\\"x420\\"} (current: {\\"os\\":\\"posix\\",\\"arch\\":\\"x64\\"})",
+      "Unsupported platform for lodash@1.0.0: wanted {/"os/":/"!yours/",/"cpu/":/"x420/"} (current: {/"os/":/"posix/",/"cpu/":/"x64/"})",
     ],
   ],
 }
@@ -394,7 +410,7 @@ Object {
       "",
       Error: whoopsie {
         "code": "EACCES",
-        "dest": "/some/cache/dir/dest",
+        "dest": "{CWD}/cache/dest",
         "path": "/not/cache/dir/path",
       },
     ],
@@ -428,7 +444,7 @@ Object {
       Error: whoopsie {
         "code": "EACCES",
         "dest": "/not/cache/dir/dest",
-        "path": "/some/cache/dir/path",
+        "path": "{CWD}/cache/path",
       },
     ],
   ],
@@ -460,8 +476,8 @@ Object {
       "",
       Error: whoopsie {
         "code": "EACCES",
-        "dest": "/some/cache/dir/dest",
-        "path": "/some/cache/dir/path",
+        "dest": "{CWD}/cache/dest",
+        "path": "{CWD}/cache/path",
       },
     ],
   ],
@@ -502,7 +518,24 @@ Object {
 `
 
 exports[`test/lib/utils/error-message.js TAP eacces/eperm {"windows":false,"loaded":true,"cachePath":false,"cacheDest":false} > must match snapshot 2`] = `
-Array []
+Array [
+  Array [
+    "title",
+    "npm",
+  ],
+  Array [
+    "argv",
+    "/"--fetch-retries/" /"0/" /"--cache/" /"{CWD}/cache/"",
+  ],
+  Array [
+    "logfile",
+    "logs-max:10 dir:{CWD}/cache/_logs/{DATE}-",
+  ],
+  Array [
+    "logfile",
+    "{CWD}/cache/_logs/{DATE}-debug-0.log",
+  ],
+]
 `
 
 exports[`test/lib/utils/error-message.js TAP eacces/eperm {"windows":false,"loaded":true,"cachePath":false,"cacheDest":true} > must match snapshot 1`] = `
@@ -517,7 +550,7 @@ Object {
         previous versions of npm which has since been addressed.
         
         To permanently fix this problem, please run:
-          sudo chown -R 69:420 "/some/cache/dir"
+          sudo chown -R 867:5309 "{CWD}/cache"
       ),
     ],
   ],
@@ -527,7 +560,20 @@ Object {
 exports[`test/lib/utils/error-message.js TAP eacces/eperm {"windows":false,"loaded":true,"cachePath":false,"cacheDest":true} > must match snapshot 2`] = `
 Array [
   Array [
-    "dummy stack trace",
+    "title",
+    "npm",
+  ],
+  Array [
+    "argv",
+    "/"--fetch-retries/" /"0/" /"--cache/" /"{CWD}/cache/"",
+  ],
+  Array [
+    "logfile",
+    "logs-max:10 dir:{CWD}/cache/_logs/{DATE}-",
+  ],
+  Array [
+    "logfile",
+    "{CWD}/cache/_logs/{DATE}-debug-0.log",
   ],
 ]
 `
@@ -544,7 +590,7 @@ Object {
         previous versions of npm which has since been addressed.
         
         To permanently fix this problem, please run:
-          sudo chown -R 69:420 "/some/cache/dir"
+          sudo chown -R 867:5309 "{CWD}/cache"
       ),
     ],
   ],
@@ -554,7 +600,20 @@ Object {
 exports[`test/lib/utils/error-message.js TAP eacces/eperm {"windows":false,"loaded":true,"cachePath":true,"cacheDest":false} > must match snapshot 2`] = `
 Array [
   Array [
-    "dummy stack trace",
+    "title",
+    "npm",
+  ],
+  Array [
+    "argv",
+    "/"--fetch-retries/" /"0/" /"--cache/" /"{CWD}/cache/"",
+  ],
+  Array [
+    "logfile",
+    "logs-max:10 dir:{CWD}/cache/_logs/{DATE}-",
+  ],
+  Array [
+    "logfile",
+    "{CWD}/cache/_logs/{DATE}-debug-0.log",
   ],
 ]
 `
@@ -571,7 +630,7 @@ Object {
         previous versions of npm which has since been addressed.
         
         To permanently fix this problem, please run:
-          sudo chown -R 69:420 "/some/cache/dir"
+          sudo chown -R 867:5309 "{CWD}/cache"
       ),
     ],
   ],
@@ -581,7 +640,20 @@ Object {
 exports[`test/lib/utils/error-message.js TAP eacces/eperm {"windows":false,"loaded":true,"cachePath":true,"cacheDest":true} > must match snapshot 2`] = `
 Array [
   Array [
-    "dummy stack trace",
+    "title",
+    "npm",
+  ],
+  Array [
+    "argv",
+    "/"--fetch-retries/" /"0/" /"--cache/" /"{CWD}/cache/"",
+  ],
+  Array [
+    "logfile",
+    "logs-max:10 dir:{CWD}/cache/_logs/{DATE}-",
+  ],
+  Array [
+    "logfile",
+    "{CWD}/cache/_logs/{DATE}-debug-0.log",
   ],
 ]
 `
@@ -642,7 +714,7 @@ Object {
       "",
       Error: whoopsie {
         "code": "EACCES",
-        "dest": "/some/cache/dir/dest",
+        "dest": "{CWD}/cache/dest",
         "path": "/not/cache/dir/path",
       },
     ],
@@ -677,7 +749,7 @@ Object {
       Error: whoopsie {
         "code": "EACCES",
         "dest": "/not/cache/dir/dest",
-        "path": "/some/cache/dir/path",
+        "path": "{CWD}/cache/path",
       },
     ],
   ],
@@ -710,8 +782,8 @@ Object {
       "",
       Error: whoopsie {
         "code": "EACCES",
-        "dest": "/some/cache/dir/dest",
-        "path": "/some/cache/dir/path",
+        "dest": "{CWD}/cache/dest",
+        "path": "{CWD}/cache/path",
       },
     ],
   ],
@@ -753,7 +825,24 @@ Object {
 `
 
 exports[`test/lib/utils/error-message.js TAP eacces/eperm {"windows":true,"loaded":true,"cachePath":false,"cacheDest":false} > must match snapshot 2`] = `
-Array []
+Array [
+  Array [
+    "title",
+    "npm",
+  ],
+  Array [
+    "argv",
+    "/"--fetch-retries/" /"0/" /"--cache/" /"{CWD}/cache/"",
+  ],
+  Array [
+    "logfile",
+    "logs-max:10 dir:{CWD}/cache/_logs/{DATE}-",
+  ],
+  Array [
+    "logfile",
+    "{CWD}/cache/_logs/{DATE}-debug-0.log",
+  ],
+]
 `
 
 exports[`test/lib/utils/error-message.js TAP eacces/eperm {"windows":true,"loaded":true,"cachePath":false,"cacheDest":true} > must match snapshot 1`] = `
@@ -778,7 +867,7 @@ Object {
       "",
       Error: whoopsie {
         "code": "EACCES",
-        "dest": "/some/cache/dir/dest",
+        "dest": "{CWD}/cache/dest",
         "path": "/not/cache/dir/path",
       },
     ],
@@ -787,7 +876,24 @@ Object {
 `
 
 exports[`test/lib/utils/error-message.js TAP eacces/eperm {"windows":true,"loaded":true,"cachePath":false,"cacheDest":true} > must match snapshot 2`] = `
-Array []
+Array [
+  Array [
+    "title",
+    "npm",
+  ],
+  Array [
+    "argv",
+    "/"--fetch-retries/" /"0/" /"--cache/" /"{CWD}/cache/"",
+  ],
+  Array [
+    "logfile",
+    "logs-max:10 dir:{CWD}/cache/_logs/{DATE}-",
+  ],
+  Array [
+    "logfile",
+    "{CWD}/cache/_logs/{DATE}-debug-0.log",
+  ],
+]
 `
 
 exports[`test/lib/utils/error-message.js TAP eacces/eperm {"windows":true,"loaded":true,"cachePath":true,"cacheDest":false} > must match snapshot 1`] = `
@@ -813,7 +919,7 @@ Object {
       Error: whoopsie {
         "code": "EACCES",
         "dest": "/not/cache/dir/dest",
-        "path": "/some/cache/dir/path",
+        "path": "{CWD}/cache/path",
       },
     ],
   ],
@@ -821,7 +927,24 @@ Object {
 `
 
 exports[`test/lib/utils/error-message.js TAP eacces/eperm {"windows":true,"loaded":true,"cachePath":true,"cacheDest":false} > must match snapshot 2`] = `
-Array []
+Array [
+  Array [
+    "title",
+    "npm",
+  ],
+  Array [
+    "argv",
+    "/"--fetch-retries/" /"0/" /"--cache/" /"{CWD}/cache/"",
+  ],
+  Array [
+    "logfile",
+    "logs-max:10 dir:{CWD}/cache/_logs/{DATE}-",
+  ],
+  Array [
+    "logfile",
+    "{CWD}/cache/_logs/{DATE}-debug-0.log",
+  ],
+]
 `
 
 exports[`test/lib/utils/error-message.js TAP eacces/eperm {"windows":true,"loaded":true,"cachePath":true,"cacheDest":true} > must match snapshot 1`] = `
@@ -846,8 +969,8 @@ Object {
       "",
       Error: whoopsie {
         "code": "EACCES",
-        "dest": "/some/cache/dir/dest",
-        "path": "/some/cache/dir/path",
+        "dest": "{CWD}/cache/dest",
+        "path": "{CWD}/cache/path",
       },
     ],
   ],
@@ -855,7 +978,24 @@ Object {
 `
 
 exports[`test/lib/utils/error-message.js TAP eacces/eperm {"windows":true,"loaded":true,"cachePath":true,"cacheDest":true} > must match snapshot 2`] = `
-Array []
+Array [
+  Array [
+    "title",
+    "npm",
+  ],
+  Array [
+    "argv",
+    "/"--fetch-retries/" /"0/" /"--cache/" /"{CWD}/cache/"",
+  ],
+  Array [
+    "logfile",
+    "logs-max:10 dir:{CWD}/cache/_logs/{DATE}-",
+  ],
+  Array [
+    "logfile",
+    "{CWD}/cache/_logs/{DATE}-debug-0.log",
+  ],
+]
 `
 
 exports[`test/lib/utils/error-message.js TAP enoent without a file > must match snapshot 1`] = `
@@ -863,7 +1003,7 @@ Object {
   "detail": Array [
     Array [
       "enoent",
-      "This is related to npm not being able to find a file.\\n",
+      "This is related to npm not being able to find a file./n",
     ],
   ],
   "summary": Array [
@@ -997,7 +1137,7 @@ Object {
     Array [
       "",
       String(
-        To correct this please trying logging in again with:
+        To correct this please try logging in again with:
             npm login
       ),
     ],
@@ -1045,6 +1185,12 @@ Object {
     Array [
       "",
       "explanation",
+    ],
+  ],
+  "files": Array [
+    Array [
+      "eresolve-report.txt",
+      "report",
     ],
   ],
   "summary": Array [
@@ -1145,7 +1291,7 @@ Object {
       String(
         Not compatible with your version of node/npm: some@package
         Required: undefined
-        Actual:   {"npm":"123.69.420-npm","node":"123.69.420-node"}
+        Actual:   {"npm":"123.456.789-npm","node":"123.456.789-node"}
       ),
     ],
   ],

@@ -43,10 +43,10 @@ uloc_getTableStringWithFallback(
 /*returns true if a is an ID separator false otherwise*/
 #define _isIDSeparator(a) (a == '_' || a == '-')
 
-U_CFUNC const char*
+U_CFUNC const char* 
 uloc_getCurrentCountryID(const char* oldID);
 
-U_CFUNC const char*
+U_CFUNC const char* 
 uloc_getCurrentLanguageID(const char* oldID);
 
 U_CFUNC void
@@ -91,6 +91,11 @@ ulocimp_getKeywordValue(const char* localeID,
                         const char* keywordName,
                         icu::ByteSink& sink,
                         UErrorCode* status);
+
+U_CAPI void U_EXPORT2
+ulocimp_getParent(const char* localeID,
+                  icu::ByteSink& sink,
+                  UErrorCode* err);
 
 /**
  * Writes a well-formed language tag for this locale ID.
@@ -157,7 +162,7 @@ ulocimp_forLanguageTag(const char* langtag,
  * (3) if inferRegion is true, the region suggested by
  * getLikelySubtags on the localeID.
  * If no region is found, returns length 0.
- *
+ * 
  * @param localeID
  *     The complete locale ID (with keywords) from which
  *     to get the region to use for supplemental data.
@@ -166,7 +171,7 @@ ulocimp_forLanguageTag(const char* langtag,
  *     no other region is found.
  * @param region
  *     Buffer in which to put the region ID found; should
- *     have a capacity at least ULOC_COUNTRY_CAPACITY.
+ *     have a capacity at least ULOC_COUNTRY_CAPACITY. 
  * @param regionCapacity
  *     The actual capacity of the region buffer.
  * @param status
@@ -237,6 +242,7 @@ ulocimp_addLikelySubtags(const char* localeID,
  *
  * @param localeID The locale to minimize
  * @param sink The output sink receiving the maximized locale
+ * @param favorScript favor to keep script if true, region if false.
  * @param err Error information if minimizing the locale failed.  If the length
  * of the localeID and the null-terminator is greater than the maximum allowed size,
  * or the localeId is not well-formed, the error code is U_ILLEGAL_ARGUMENT_ERROR.
@@ -245,6 +251,7 @@ ulocimp_addLikelySubtags(const char* localeID,
 U_CAPI void U_EXPORT2
 ulocimp_minimizeSubtags(const char* localeID,
                         icu::ByteSink& sink,
+                        bool favorScript,
                         UErrorCode* err);
 
 U_CAPI const char * U_EXPORT2

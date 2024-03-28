@@ -8,7 +8,6 @@
 
 #include "src/ast/ast-value-factory.h"
 #include "src/ast/scopes.h"
-#include "src/base/platform/platform.h"
 #include "src/base/strings.h"
 #include "src/base/vector.h"
 #include "src/common/globals.h"
@@ -35,7 +34,7 @@ CallPrinter::CallPrinter(Isolate* isolate, bool is_user_js,
   is_user_js_ = is_user_js;
   error_in_spread_args_ = error_in_spread_args;
   spread_arg_ = nullptr;
-  function_kind_ = kNormalFunction;
+  function_kind_ = FunctionKind::kNormalFunction;
   InitializeAstVisitor(isolate);
 }
 
@@ -343,20 +342,19 @@ void CallPrinter::VisitAssignment(Assignment* node) {
     }
   }
   if (!was_found) {
+    if (found_) {
+      Find(node->target(), true);
+      return;
+    }
     Find(node->target());
     if (node->target()->IsArrayLiteral()) {
       // Special case the visit for destructuring array assignment.
-      bool was_found = false;
       if (node->value()->position() == position_) {
         is_iterator_error_ = true;
         was_found = !found_;
         found_ = true;
       }
       Find(node->value(), true);
-      if (was_found) {
-        done_ = true;
-        found_ = false;
-      }
     } else {
       Find(node->value());
     }
@@ -400,7 +398,7 @@ void CallPrinter::VisitProperty(Property* node) {
   Expression* key = node->key();
   Literal* literal = key->AsLiteral();
   if (literal != nullptr &&
-      literal->BuildValue(isolate_)->IsInternalizedString()) {
+      IsInternalizedString(*literal->BuildValue(isolate_))) {
     Find(node->obj(), true);
     if (node->is_optional_chain_link()) {
       Print("?");
@@ -601,21 +599,21 @@ void CallPrinter::FindArguments(const ZonePtrList<Expression>* arguments) {
 }
 
 void CallPrinter::PrintLiteral(Handle<Object> value, bool quote) {
-  if (value->IsString()) {
+  if (IsString(*value)) {
     if (quote) Print("\"");
     Print(Handle<String>::cast(value));
     if (quote) Print("\"");
-  } else if (value->IsNull(isolate_)) {
+  } else if (IsNull(*value, isolate_)) {
     Print("null");
-  } else if (value->IsTrue(isolate_)) {
+  } else if (IsTrue(*value, isolate_)) {
     Print("true");
-  } else if (value->IsFalse(isolate_)) {
+  } else if (IsFalse(*value, isolate_)) {
     Print("false");
-  } else if (value->IsUndefined(isolate_)) {
+  } else if (IsUndefined(*value, isolate_)) {
     Print("undefined");
-  } else if (value->IsNumber()) {
+  } else if (IsNumber(*value)) {
     Print(isolate_->factory()->NumberToString(value));
-  } else if (value->IsSymbol()) {
+  } else if (IsSymbol(*value)) {
     // Symbols can only occur as literals if they were inserted by the parser.
     PrintLiteral(handle(Handle<Symbol>::cast(value)->description(), isolate_),
                  false);
@@ -828,7 +826,7 @@ const char* AstPrinter::PrintProgram(FunctionLiteral* program) {
   Init();
   { IndentedScope indent(this, "FUNC", program->position());
     PrintIndented("KIND");
-    Print(" %d\n", program->kind());
+    Print(" %d\n", static_cast<uint32_t>(program->kind()));
     PrintIndented("LITERAL ID");
     Print(" %d\n", program->function_literal_id());
     PrintIndented("SUSPEND COUNT");
@@ -855,7 +853,7 @@ const char* AstPrinter::PrintProgram(FunctionLiteral* program) {
 
 
 void AstPrinter::PrintOut(Isolate* isolate, AstNode* node) {
-  AstPrinter printer(isolate->stack_guard()->real_climit());
+  AstPrinter printer(isolate ? isolate->stack_guard()->real_climit() : 0);
   printer.Init();
   printer.Visit(node);
   PrintF("%s", printer.output_);
@@ -967,7 +965,7 @@ void AstPrinter::VisitWithStatement(WithStatement* node) {
 
 
 void AstPrinter::VisitSwitchStatement(SwitchStatement* node) {
-  IndentedScope indent(this, "SWITCH", node->position());
+  IndentedScope switch_indent(this, "SWITCH", node->position());
   PrintIndentedVisit("TAG", node->tag());
   for (CaseClause* clause : *node->cases()) {
     if (clause->is_default()) {
@@ -1247,7 +1245,7 @@ void AstPrinter::PrintObjectProperties(
 
 
 void AstPrinter::VisitArrayLiteral(ArrayLiteral* node) {
-  IndentedScope indent(this, "ARRAY LITERAL", node->position());
+  IndentedScope array_indent(this, "ARRAY LITERAL", node->position());
   if (node->values()->length() > 0) {
     IndentedScope indent(this, "VALUES", node->position());
     for (int i = 0; i < node->values()->length(); i++) {
@@ -1367,6 +1365,10 @@ void AstPrinter::VisitProperty(Property* node) {
     case KEYED_PROPERTY:
     case KEYED_SUPER_PROPERTY: {
       PrintIndentedVisit("KEY", node->key());
+      break;
+    }
+    case PRIVATE_DEBUG_DYNAMIC: {
+      PrintIndentedVisit("PRIVATE_DEBUG_DYNAMIC", node->key());
       break;
     }
     case NON_PROPERTY:

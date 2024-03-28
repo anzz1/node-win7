@@ -6,6 +6,7 @@ This directory contains modules used to test the Node.js implementation.
 
 * [ArrayStream module](#arraystream-module)
 * [Benchmark module](#benchmark-module)
+* [Child process module](#child-process-module)
 * [Common module API](#common-module-api)
 * [Countdown module](#countdown-module)
 * [CPU Profiler module](#cpu-profiler-module)
@@ -35,6 +36,50 @@ The `benchmark` module is used by tests to run benchmarks.
 * `env` [\<Object>][<Object>] Environment variables to be applied during the
   run.
 
+## Child Process Module
+
+The `child_process` module is used by tests that launch child processes.
+
+### `spawnSyncAndExit(command[, args][, spawnOptions], expectations)`
+
+Spawns a child process synchronously using [`child_process.spawnSync()`][] and
+check if it runs in the way expected. If it does not, print the stdout and
+stderr output from the child process and additional information about it to
+the stderr of the current process before throwing and error. This helps
+gathering more information about test failures coming from child processes.
+
+* `command`, `args`, `spawnOptions` See [`child_process.spawnSync()`][]
+* `expectations` [\<Object>][<Object>]
+  * `status` [\<number>][<number>] Expected `child.status`
+  * `signal` [\<string>][<string>] | `null` Expected `child.signal`
+  * `stderr` [\<string>][<string>] | [\<RegExp>][<RegExp>] |
+    [\<Function>][<Function>] Optional. If it's a string, check that the output
+    to the stderr of the child process is exactly the same as the string. If
+    it's a regular expression, check that the stderr matches it. If it's a
+    function, invoke it with the stderr output as a string and check
+    that it returns true. The function can just throw errors (e.g. assertion
+    errors) to provide more information if the check fails.
+  * `stdout` [\<string>][<string>] | [\<RegExp>][<RegExp>] |
+    [\<Function>][<Function>] Optional. Similar to `stderr` but for the stdout.
+  * `trim` [\<boolean>][<boolean>] Optional. Whether this method should trim
+    out the whitespace characters when checking `stderr` and `stdout` outputs.
+    Defaults to `false`.
+* return [\<Object>][<Object>]
+  * `child` [\<ChildProcess>][<ChildProcess>] The child process returned by
+    [`child_process.spawnSync()`][].
+  * `stderr` [\<string>][<string>] The output from the child process to stderr.
+  * `stdout` [\<string>][<string>] The output from the child process to stdout.
+
+### `spawnSyncAndExitWithoutError(command[, args][, spawnOptions])`
+
+Similar to `expectSyncExit()` with the `status` expected to be 0 and
+`signal` expected to be `null`.
+
+### `spawnSyncAndAssert(command[, args][, spawnOptions], expectations)`
+
+Similar to `spawnSyncAndExitWithoutError()`, but with an additional
+`expectations` parameter.
+
 ## Common Module API
 
 The `common` module is used by tests for consistency across repeated
@@ -59,7 +104,7 @@ On non-Windows platforms, this always returns `true`.
 
 ### `createZeroFilledFile(filename)`
 
-Creates a 10 MB file of all null characters.
+Creates a 10 MiB file of all null characters.
 
 ### `enoughTestMem`
 
@@ -110,20 +155,20 @@ expectWarning('DeprecationWarning', [
 
 expectWarning('DeprecationWarning', {
   DEP0XXX: 'Foobar is deprecated',
-  DEP0XX2: 'Baz is also deprecated'
+  DEP0XX2: 'Baz is also deprecated',
 });
 
 expectWarning({
   DeprecationWarning: {
     DEP0XXX: 'Foobar is deprecated',
-    DEP0XX1: 'Baz is also deprecated'
+    DEP0XX1: 'Baz is also deprecated',
   },
   Warning: [
     ['Multiple array entries are fine', 'SpecialWarningCode'],
     ['No code is also fine'],
   ],
   SingleEntry: ['This will also work', 'WarningCode'],
-  SingleString: 'Single string entries without code will also work'
+  SingleString: 'Single string entries without code will also work',
 });
 ```
 
@@ -299,6 +344,40 @@ If `fn` is not provided, an empty function will be used.
 Returns a function that triggers an `AssertionError` if it is invoked. `msg` is
 used as the error message for the `AssertionError`.
 
+### `mustNotMutateObjectDeep([target])`
+
+* `target` [\<any>][<any>] default = `undefined`
+* return [\<any>][<any>]
+
+If `target` is an Object, returns a proxy object that triggers
+an `AssertionError` on mutation attempt, including mutation of deeply nested
+Objects. Otherwise, it returns `target` directly.
+
+Use of this function is encouraged for relevant regression tests.
+
+```mjs
+import { open } from 'node:fs/promises';
+import { mustNotMutateObjectDeep } from '../common/index.mjs';
+
+const _mutableOptions = { length: 4, position: 8 };
+const options = mustNotMutateObjectDeep(_mutableOptions);
+
+// In filehandle.read or filehandle.write, attempt to mutate options will throw
+// In the test code, options can still be mutated via _mutableOptions
+const fh = await open('/path/to/file', 'r+');
+const { buffer } = await fh.read(options);
+_mutableOptions.position = 4;
+await fh.write(buffer, options);
+
+// Inline usage
+const stats = await fh.stat(mustNotMutateObjectDeep({ bigint: true }));
+console.log(stats.size);
+```
+
+Caveats: built-in objects that make use of their internal slots (for example,
+`Map`s and `Set`s) might not work with this function. It returns Functions
+directly, not preventing their mutation.
+
 ### `mustSucceed([fn])`
 
 * `fn` [\<Function>][<Function>] default = () => {}
@@ -359,7 +438,7 @@ Platform normalized `pwd` command options. Usage example:
 
 ```js
 const common = require('../common');
-const { spawn } = require('child_process');
+const { spawn } = require('node:child_process');
 
 spawn(...common.pwdCommand, { stdio: ['pipe'] });
 ```
@@ -608,6 +687,12 @@ environment variables.
 If set, `NODE_COMMON_PORT`'s value overrides the `common.PORT` default value of
 12346\.
 
+### `NODE_REGENERATE_SNAPSHOTS`
+
+If set, test snapshots for a the current test are regenerated.
+for example `NODE_REGENERATE_SNAPSHOTS=1 out/Release/node test/parallel/test-runner-output.mjs`
+will update all the test runner output snapshots.
+
 ### `NODE_SKIP_FLAG_CHECK`
 
 If set, command line arguments passed to individual tests are not validated.
@@ -638,6 +723,12 @@ The absolute path to the `test/fixtures/` directory.
 * `...args` [\<string>][<string>]
 
 Returns the result of `path.join(fixtures.fixturesDir, ...args)`.
+
+### `fixtures.fileURL(...args)`
+
+* `...args` [\<string>][<string>]
+
+Returns the result of `url.pathToFileURL(fixtures.path(...args))`.
 
 ### `fixtures.readSync(args[, enc])`
 
@@ -686,7 +777,7 @@ validateSnapshotNodes('TLSWRAP', [
       { name: 'enc_out' },
       { name: 'enc_in' },
       { name: 'TLSWrap' },
-    ]
+    ],
   },
 ]);
 ```
@@ -951,6 +1042,24 @@ Validates the schema of a diagnostic report file whose path is specified in
 Validates the schema of a diagnostic report whose content is specified in
 `report`. If the report fails validation, an exception is thrown.
 
+## SEA Module
+
+The `sea` module provides helper functions for testing Single Executable
+Application functionality.
+
+### `skipIfSingleExecutableIsNotSupported()`
+
+Skip the rest of the tests if single executable applications are not supported
+in the current configuration.
+
+### `generateSEA(targetExecutable, sourceExecutable, seaBlob, verifyWorkflow)`
+
+Copy `sourceExecutable` to `targetExecutable`, use postject to inject `seaBlob`
+into `targetExecutable` and sign it if necessary.
+
+If `verifyWorkflow` is false (default) and any of the steps fails,
+it skips the tests. Otherwise, an error is thrown.
+
 ## tick Module
 
 The `tick` module provides a helper function that can be used to call a callback
@@ -971,9 +1080,22 @@ The `tmpdir` module supports the use of a temporary directory for testing.
 
 The realpath of the testing temporary directory.
 
-### `refresh()`
+### `fileURL([...paths])`
 
-Deletes and recreates the testing temporary directory.
+* `...paths` [\<string>][<string>]
+* return [\<URL>][<URL>]
+
+Resolves a sequence of paths into absolute url in the temporary directory.
+
+When called without arguments, returns absolute url of the testing
+temporary directory with explicit trailing `/`.
+
+### `refresh(useSpawn)`
+
+* `useSpawn` [\<boolean>][<boolean>] default = false
+
+Deletes and recreates the testing temporary directory. When `useSpawn` is true
+this action is performed using `child_process.spawnSync`.
 
 The first time `refresh()` runs, it adds a listener to process `'exit'` that
 cleans the temporary directory. Thus, every file under `tmpdir.path` needs to
@@ -987,6 +1109,22 @@ Avoid calling it more than once in an asynchronous context as one call
 might refresh the temporary directory of a different context, causing
 the test to fail somewhat mysteriously.
 
+### `resolve([...paths])`
+
+* `...paths` [\<string>][<string>]
+* return [\<string>][<string>]
+
+Resolves a sequence of paths into absolute path in the temporary directory.
+
+### `hasEnoughSpace(size)`
+
+* `size` [\<number>][<number>] Required size, in bytes.
+
+Returns `true` if the available blocks of the file system underlying `path`
+are likely sufficient to hold a single file of `size` bytes. This is useful for
+skipping tests that require hundreds of megabytes or even gigabytes of temporary
+files, but it is inaccurate and susceptible to race conditions.
+
 ## UDP pair helper
 
 The `common/udppair` module exports a function `makeUDPPair` and a class
@@ -998,7 +1136,7 @@ an `emitReceived()` API for actin as if data has been received on it.
 `makeUDPPair` returns an object `{ clientSide, serverSide }` where each side
 is an `FakeUDPWrap` connected to the other side.
 
-There is no difference between cient or server side beyond their names.
+There is no difference between client or server side beyond their names.
 
 ## WPT Module
 
@@ -1020,16 +1158,20 @@ See [the WPT tests README][] for details.
 [<ArrayBufferView>]: https://developer.mozilla.org/en-US/docs/Web/API/ArrayBufferView
 [<Buffer>]: https://nodejs.org/api/buffer.html#buffer_class_buffer
 [<BufferSource>]: https://developer.mozilla.org/en-US/docs/Web/API/BufferSource
+[<ChildProcess>]: ../../doc/api/child_process.md#class-childprocess
 [<Error>]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error
 [<Function>]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Function
 [<Object>]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object
 [<RegExp>]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp
+[<URL>]: https://developer.mozilla.org/en-US/docs/Web/API/URL
+[<any>]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Data_types
 [<bigint>]: https://github.com/tc39/proposal-bigint
 [<boolean>]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Boolean_type
 [<number>]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Number_type
 [<string>]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type
 [Web Platform Tests]: https://github.com/web-platform-tests/wpt
+[`child_process.spawnSync()`]: ../../doc/api/child_process.md#child_processspawnsynccommand-args-options
 [`hijackstdio.hijackStdErr()`]: #hijackstderrlistener
 [`hijackstdio.hijackStdOut()`]: #hijackstdoutlistener
-[internationalization]: https://github.com/nodejs/node/wiki/Intl
+[internationalization]: ../../doc/api/intl.md
 [the WPT tests README]: ../wpt/README.md

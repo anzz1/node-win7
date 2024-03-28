@@ -98,6 +98,90 @@ TEST_F(DebugPropertyIteratorTest, DoestWalksPrototypeChainIfInaccesible) {
   ASSERT_TRUE(iterator->Done());
 }
 
+TEST_F(DebugPropertyIteratorTest, SkipsIndicesOnArrays) {
+  TryCatch try_catch(isolate());
+
+  Local<Value> elements[2] = {
+      Number::New(isolate(), 21),
+      Number::New(isolate(), 42),
+  };
+  auto array = Array::New(isolate(), elements, arraysize(elements));
+
+  auto iterator = PropertyIterator::Create(context(), array, true);
+  while (!iterator->Done()) {
+    ASSERT_FALSE(iterator->is_array_index());
+    ASSERT_TRUE(iterator->Advance().FromMaybe(false));
+  }
+}
+
+TEST_F(DebugPropertyIteratorTest, SkipsIndicesOnObjects) {
+  TryCatch try_catch(isolate());
+
+  Local<Name> names[2] = {
+      String::NewFromUtf8Literal(isolate(), "42"),
+      String::NewFromUtf8Literal(isolate(), "x"),
+  };
+  Local<Value> values[arraysize(names)] = {
+      Number::New(isolate(), 42),
+      Number::New(isolate(), 21),
+  };
+  Local<Object> object =
+      Object::New(isolate(), Null(isolate()), names, values, arraysize(names));
+
+  auto iterator = PropertyIterator::Create(context(), object, true);
+  while (!iterator->Done()) {
+    ASSERT_FALSE(iterator->is_array_index());
+    ASSERT_TRUE(iterator->Advance().FromMaybe(false));
+  }
+}
+
+TEST_F(DebugPropertyIteratorTest, SkipsIndicesOnTypedArrays) {
+  TryCatch try_catch(isolate());
+
+  auto buffer = ArrayBuffer::New(isolate(), 1024 * 1024);
+  auto array = Uint8Array::New(buffer, 0, 1024 * 1024);
+
+  auto iterator = PropertyIterator::Create(context(), array, true);
+  while (!iterator->Done()) {
+    ASSERT_FALSE(iterator->is_array_index());
+    ASSERT_TRUE(iterator->Advance().FromMaybe(false));
+  }
+}
+
+#if V8_CAN_CREATE_SHARED_HEAP_BOOL
+
+using SharedObjectDebugPropertyIteratorTest = TestJSSharedMemoryWithContext;
+
+TEST_F(SharedObjectDebugPropertyIteratorTest, SharedStruct) {
+  TryCatch try_catch(isolate());
+
+  const char source_text[] =
+      "let S = new SharedStructType(['field', 'another_field']);"
+      "new S();";
+
+  auto shared_struct =
+      RunJS(context(), source_text)->ToObject(context()).ToLocalChecked();
+  auto iterator = PropertyIterator::Create(context(), shared_struct);
+
+  ASSERT_NE(iterator, nullptr);
+  ASSERT_FALSE(iterator->Done());
+  EXPECT_TRUE(iterator->is_own());
+  char name_buffer[64];
+  iterator->name().As<v8::String>()->WriteUtf8(isolate(), name_buffer);
+  EXPECT_EQ("field", std::string(name_buffer));
+  ASSERT_TRUE(iterator->Advance().FromMaybe(false));
+
+  ASSERT_FALSE(iterator->Done());
+  EXPECT_TRUE(iterator->is_own());
+  iterator->name().As<v8::String>()->WriteUtf8(isolate(), name_buffer);
+  EXPECT_EQ("another_field", std::string(name_buffer));
+  ASSERT_TRUE(iterator->Advance().FromMaybe(false));
+
+  ASSERT_FALSE(iterator->Done());
+}
+
+#endif  // V8_CAN_CREATE_SHARED_HEAP_BOOL
+
 }  // namespace
 }  // namespace debug
 }  // namespace v8

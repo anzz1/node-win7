@@ -1,5 +1,5 @@
 /*
- * Copyright 2006-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2006-2023 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -251,10 +251,11 @@ static EVP_PKEY_CTX *int_ctx_new(OSSL_LIB_CTX *libctx,
      */
     if (e != NULL)
         pmeth = ENGINE_get_pkey_meth(e, id);
-    else if (pkey != NULL && pkey->foreign)
+    else
+# endif /* OPENSSL_NO_ENGINE */
+    if (pkey != NULL && pkey->foreign)
         pmeth = EVP_PKEY_meth_find(id);
     else
-# endif
         app_pmeth = pmeth = evp_pkey_meth_find_added_by_application(id);
 
     /* END legacy */
@@ -265,7 +266,20 @@ static EVP_PKEY_CTX *int_ctx_new(OSSL_LIB_CTX *libctx,
      * fetching a provider implementation.
      */
     if (e == NULL && app_pmeth == NULL && keytype != NULL) {
-        keymgmt = EVP_KEYMGMT_fetch(libctx, keytype, propquery);
+        /*
+         * If |pkey| is given and is provided, we take a reference to its
+         * keymgmt.  Otherwise, we fetch one for the keytype we got. This
+         * is to ensure that operation init functions can access what they
+         * need through this single pointer.
+         */
+        if (pkey != NULL && pkey->keymgmt != NULL) {
+            if (!EVP_KEYMGMT_up_ref(pkey->keymgmt))
+                ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            else
+                keymgmt = pkey->keymgmt;
+        } else {
+            keymgmt = EVP_KEYMGMT_fetch(libctx, keytype, propquery);
+        }
         if (keymgmt == NULL)
             return NULL;   /* EVP_KEYMGMT_fetch() recorded an error */
 
@@ -496,8 +510,11 @@ EVP_PKEY_CTX *EVP_PKEY_CTX_dup(const EVP_PKEY_CTX *pctx)
         if (pctx->op.kex.algctx != NULL) {
             if (!ossl_assert(pctx->op.kex.exchange != NULL))
                 goto err;
-            rctx->op.kex.algctx
-                = pctx->op.kex.exchange->dupctx(pctx->op.kex.algctx);
+
+            if (pctx->op.kex.exchange->dupctx != NULL)
+                rctx->op.kex.algctx
+                    = pctx->op.kex.exchange->dupctx(pctx->op.kex.algctx);
+
             if (rctx->op.kex.algctx == NULL) {
                 EVP_KEYEXCH_free(rctx->op.kex.exchange);
                 rctx->op.kex.exchange = NULL;
@@ -514,8 +531,11 @@ EVP_PKEY_CTX *EVP_PKEY_CTX_dup(const EVP_PKEY_CTX *pctx)
         if (pctx->op.sig.algctx != NULL) {
             if (!ossl_assert(pctx->op.sig.signature != NULL))
                 goto err;
-            rctx->op.sig.algctx
-                = pctx->op.sig.signature->dupctx(pctx->op.sig.algctx);
+
+            if (pctx->op.sig.signature->dupctx != NULL)
+                rctx->op.sig.algctx
+                    = pctx->op.sig.signature->dupctx(pctx->op.sig.algctx);
+
             if (rctx->op.sig.algctx == NULL) {
                 EVP_SIGNATURE_free(rctx->op.sig.signature);
                 rctx->op.sig.signature = NULL;
@@ -532,8 +552,11 @@ EVP_PKEY_CTX *EVP_PKEY_CTX_dup(const EVP_PKEY_CTX *pctx)
         if (pctx->op.ciph.algctx != NULL) {
             if (!ossl_assert(pctx->op.ciph.cipher != NULL))
                 goto err;
-            rctx->op.ciph.algctx
-                = pctx->op.ciph.cipher->dupctx(pctx->op.ciph.algctx);
+
+            if (pctx->op.ciph.cipher->dupctx != NULL)
+                rctx->op.ciph.algctx
+                    = pctx->op.ciph.cipher->dupctx(pctx->op.ciph.algctx);
+
             if (rctx->op.ciph.algctx == NULL) {
                 EVP_ASYM_CIPHER_free(rctx->op.ciph.cipher);
                 rctx->op.ciph.cipher = NULL;
@@ -550,8 +573,11 @@ EVP_PKEY_CTX *EVP_PKEY_CTX_dup(const EVP_PKEY_CTX *pctx)
         if (pctx->op.encap.algctx != NULL) {
             if (!ossl_assert(pctx->op.encap.kem != NULL))
                 goto err;
-            rctx->op.encap.algctx
-                = pctx->op.encap.kem->dupctx(pctx->op.encap.algctx);
+
+            if (pctx->op.encap.kem->dupctx != NULL)
+                rctx->op.encap.algctx
+                    = pctx->op.encap.kem->dupctx(pctx->op.encap.algctx);
+
             if (rctx->op.encap.algctx == NULL) {
                 EVP_KEM_free(rctx->op.encap.kem);
                 rctx->op.encap.kem = NULL;

@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2023 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -289,14 +289,28 @@ X509_PUBKEY *X509_PUBKEY_dup(const X509_PUBKEY *a)
             || (pubkey->algor = X509_ALGOR_dup(a->algor)) == NULL
             || (pubkey->public_key = ASN1_BIT_STRING_new()) == NULL
             || !ASN1_BIT_STRING_set(pubkey->public_key,
-                                    a->public_key->data, a->public_key->length)
-            || (a->pkey != NULL && !EVP_PKEY_up_ref(a->pkey))) {
+                                    a->public_key->data,
+                                    a->public_key->length)) {
         x509_pubkey_ex_free((ASN1_VALUE **)&pubkey,
                             ASN1_ITEM_rptr(X509_PUBKEY_INTERNAL));
         ERR_raise(ERR_LIB_X509, ERR_R_MALLOC_FAILURE);
         return NULL;
     }
-    pubkey->pkey = a->pkey;
+
+    if (a->pkey != NULL) {
+        ERR_set_mark();
+        pubkey->pkey = EVP_PKEY_dup(a->pkey);
+        if (pubkey->pkey == NULL) {
+            pubkey->flag_force_legacy = 1;
+            if (x509_pubkey_decode(&pubkey->pkey, pubkey) <= 0) {
+                x509_pubkey_ex_free((ASN1_VALUE **)&pubkey,
+                                    ASN1_ITEM_rptr(X509_PUBKEY_INTERNAL));
+                ERR_clear_last_mark();
+                return NULL;
+            }
+        }
+        ERR_pop_to_mark();
+    }
     return pubkey;
 }
 
@@ -724,6 +738,30 @@ DSA *d2i_DSA_PUBKEY(DSA **a, const unsigned char **pp, long length)
     if (key == NULL)
         return NULL;
     *pp = q;
+    if (a != NULL) {
+        DSA_free(*a);
+        *a = key;
+    }
+    return key;
+}
+
+/* Called from decoders; disallows provided DSA keys without parameters. */
+DSA *ossl_d2i_DSA_PUBKEY(DSA **a, const unsigned char **pp, long length)
+{
+    DSA *key = NULL;
+    const unsigned char *data;
+    const BIGNUM *p, *q, *g;
+
+    data = *pp;
+    key = d2i_DSA_PUBKEY(NULL, &data, length);
+    if (key == NULL)
+        return NULL;
+    DSA_get0_pqg(key, &p, &q, &g);
+    if (p == NULL || q == NULL || g == NULL) {
+        DSA_free(key);
+        return NULL;
+    }
+    *pp = data;
     if (a != NULL) {
         DSA_free(*a);
         *a = key;

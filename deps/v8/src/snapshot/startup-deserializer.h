@@ -7,7 +7,6 @@
 
 #include "src/snapshot/deserializer.h"
 #include "src/snapshot/snapshot-data.h"
-#include "src/snapshot/snapshot.h"
 
 namespace v8 {
 namespace internal {
@@ -25,7 +24,6 @@ class StartupDeserializer final : public Deserializer<Isolate> {
   void DeserializeIntoIsolate();
 
  private:
-  void DeserializeStringTable();
   void FlushICache();
   void LogNewMapEvents();
 };

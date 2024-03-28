@@ -2,7 +2,7 @@
 'use strict';
 
 const common = require('../common');
-const { isDisturbed } = require('stream');
+const { isDisturbed, isErrored, isReadable } = require('stream');
 const assert = require('assert');
 const {
   isPromise,
@@ -32,6 +32,7 @@ const {
   readableStreamDefaultControllerCanCloseOrEnqueue,
   readableByteStreamControllerClose,
   readableByteStreamControllerRespond,
+  readableStreamReaderGenericRelease,
 } = require('internal/webstreams/readablestream');
 
 const {
@@ -78,6 +79,36 @@ const {
   assert(!r.locked);
   r.getReader();
   assert(r.locked);
+}
+
+{
+  // Throw error and return rejected promise in `cancel()` method
+  // would execute same cleanup code
+  const r1 = new ReadableStream({
+    cancel: () => {
+      return Promise.reject('Cancel Error');
+    },
+  });
+  r1.cancel().finally(common.mustCall(() => {
+    const controllerState = r1[kState].controller[kState];
+
+    assert.strictEqual(controllerState.pullAlgorithm, undefined);
+    assert.strictEqual(controllerState.cancelAlgorithm, undefined);
+    assert.strictEqual(controllerState.sizeAlgorithm, undefined);
+  })).catch(() => {});
+
+  const r2 = new ReadableStream({
+    cancel() {
+      throw new Error('Cancel Error');
+    }
+  });
+  r2.cancel().finally(common.mustCall(() => {
+    const controllerState = r2[kState].controller[kState];
+
+    assert.strictEqual(controllerState.pullAlgorithm, undefined);
+    assert.strictEqual(controllerState.cancelAlgorithm, undefined);
+    assert.strictEqual(controllerState.sizeAlgorithm, undefined);
+  })).catch(() => {});
 }
 
 {
@@ -150,16 +181,28 @@ const {
 }
 
 {
-  // These are silly but they should all work per spec
-  new ReadableStream(1);
-  new ReadableStream('hello');
-  new ReadableStream(false);
+  new ReadableStream({});
   new ReadableStream([]);
-  new ReadableStream(1, 1);
-  new ReadableStream(1, 'hello');
-  new ReadableStream(1, false);
-  new ReadableStream(1, []);
+  new ReadableStream({}, null);
+  new ReadableStream({}, {});
+  new ReadableStream({}, []);
 }
+
+['a', false, 1, null].forEach((source) => {
+  assert.throws(() => {
+    new ReadableStream(source);
+  }, {
+    code: 'ERR_INVALID_ARG_TYPE',
+  });
+});
+
+['a', false, 1].forEach((strategy) => {
+  assert.throws(() => {
+    new ReadableStream({}, strategy);
+  }, {
+    code: 'ERR_INVALID_ARG_TYPE',
+  });
+});
 
 ['a', {}, false].forEach((size) => {
   assert.throws(() => {
@@ -297,17 +340,8 @@ assert.throws(() => {
   const read1 = reader.read();
   const read2 = reader.read();
 
-  // The stream is empty so the read will never settle.
-  read1.then(
-    common.mustNotCall(),
-    common.mustNotCall()
-  );
-
-  // The stream is empty so the read will never settle.
-  read2.then(
-    common.mustNotCall(),
-    common.mustNotCall()
-  );
+  read1.then(common.mustNotCall(), common.mustCall());
+  read2.then(common.mustNotCall(), common.mustCall());
 
   assert.notStrictEqual(read1, read2);
 
@@ -315,10 +349,9 @@ assert.throws(() => {
 
   delay().then(common.mustCall());
 
-  assert.throws(() => reader.releaseLock(), {
-    code: 'ERR_INVALID_STATE',
-  });
   assert(stream.locked);
+  reader.releaseLock();
+  assert(!stream.locked);
 }
 
 {
@@ -334,11 +367,29 @@ assert.throws(() => {
 
   assert.rejects(reader.read(), {
     code: 'ERR_INVALID_STATE',
-  });
+  }).then(common.mustCall());
 
   assert.rejects(closedBefore, {
     code: 'ERR_INVALID_STATE',
-  });
+  }).then(common.mustCall());
+}
+
+{
+  const stream = new ReadableStream();
+  const iterable = stream.values();
+  readableStreamReaderGenericRelease(stream[kState].reader);
+  assert.rejects(iterable.next(), {
+    code: 'ERR_INVALID_STATE',
+  }).then(common.mustCall());
+}
+
+{
+  const stream = new ReadableStream();
+  const iterable = stream.values();
+  readableStreamReaderGenericRelease(stream[kState].reader);
+  assert.rejects(iterable.return(), {
+    code: 'ERR_INVALID_STATE',
+  }).then(common.mustCall());
 }
 
 {
@@ -352,7 +403,7 @@ assert.throws(() => {
 
   assert.rejects(stream.cancel(), {
     code: 'ERR_INVALID_STATE',
-  });
+  }).then(common.mustCall());
 
   reader.cancel();
 
@@ -444,7 +495,7 @@ assert.throws(() => {
   closedBefore.then(common.mustCall());
   assert.rejects(closedAfter, {
     code: 'ERR_INVALID_STATE',
-  });
+  }).then(common.mustCall());
 }
 
 {
@@ -466,7 +517,7 @@ assert.throws(() => {
   closedBefore.then(common.mustCall());
   assert.rejects(closedAfter, {
     code: 'ERR_INVALID_STATE',
-  });
+  }).then(common.mustCall());
 }
 
 {
@@ -540,9 +591,9 @@ assert.throws(() => {
   });
   stream.getReader().releaseLock();
   const reader = stream.getReader();
-  assert.rejects(reader.closed, error);
-  assert.rejects(reader.read(), error);
-  assert.rejects(reader.read(), error);
+  assert.rejects(reader.closed, error).then(common.mustCall());
+  assert.rejects(reader.read(), error).then(common.mustCall());
+  assert.rejects(reader.read(), error).then(common.mustCall());
 }
 
 {
@@ -556,8 +607,8 @@ assert.throws(() => {
   const cancel1 = reader.cancel();
   const cancel2 = reader.cancel();
   assert.notStrictEqual(cancel1, cancel2);
-  assert.rejects(cancel1, error);
-  assert.rejects(cancel2, error);
+  assert.rejects(cancel1, error).then(common.mustCall());
+  assert.rejects(cancel2, error).then(common.mustCall());
 }
 
 {
@@ -569,9 +620,9 @@ assert.throws(() => {
   });
   stream.getReader().releaseLock();
   const reader = stream.getReader();
-  assert.rejects(reader.closed, error);
-  assert.rejects(reader.read(), error);
-  assert.rejects(reader.read(), error);
+  assert.rejects(reader.closed, error).then(common.mustCall());
+  assert.rejects(reader.read(), error).then(common.mustCall());
+  assert.rejects(reader.read(), error).then(common.mustCall());
 }
 
 {
@@ -678,8 +729,10 @@ assert.throws(() => {
 
   assert.notStrictEqual(closed1, closed2);
 
-  assert.rejects(closed1, error);
-  assert.rejects(closed2, error);
+  assert.rejects(closed1, error).then(common.mustCall());
+  assert.rejects(closed2, error).then(common.mustCall());
+
+  reader1.read();
 }
 
 {
@@ -757,8 +810,8 @@ assert.throws(() => {
 
   const { 0: s1, 1: s2 } = stream.tee();
 
-  assert.rejects(s1.cancel(), error);
-  assert.rejects(s2.cancel(), error);
+  assert.rejects(s1.cancel(), error).then(common.mustCall());
+  assert.rejects(s2.cancel(), error).then(common.mustCall());
 }
 
 {
@@ -773,8 +826,8 @@ assert.throws(() => {
   const { 0: s1, 1: s2 } = stream.tee();
   c.error(error);
 
-  assert.rejects(s1.cancel(), error);
-  assert.rejects(s2.cancel(), error);
+  assert.rejects(s1.cancel(), error).then(common.mustCall());
+  assert.rejects(s2.cancel(), error).then(common.mustCall());
 }
 
 {
@@ -791,11 +844,11 @@ assert.throws(() => {
   const reader1 = s1.getReader();
   const reader2 = s2.getReader();
 
-  assert.rejects(reader1.closed, error);
-  assert.rejects(reader2.closed, error);
+  assert.rejects(reader1.closed, error).then(common.mustCall());
+  assert.rejects(reader2.closed, error).then(common.mustCall());
 
-  assert.rejects(reader1.read(), error);
-  assert.rejects(reader2.read(), error);
+  assert.rejects(reader1.read(), error).then(common.mustCall());
+  assert.rejects(reader2.read(), error).then(common.mustCall());
 
   setImmediate(() => c.error(error));
 }
@@ -999,7 +1052,7 @@ assert.throws(() => {
 
   const reader = stream.getReader();
 
-  assert.rejects(reader.closed, error);
+  assert.rejects(reader.closed, error).then(common.mustCall());
 }
 
 {
@@ -1014,7 +1067,7 @@ assert.throws(() => {
 
   const reader = stream.getReader();
 
-  assert.rejects(reader.closed, error);
+  assert.rejects(reader.closed, error).then(common.mustCall());
 }
 
 {
@@ -1255,7 +1308,6 @@ class Source {
   });
 
   async function read(stream) {
-    // eslint-disable-next-line no-unused-vars
     for await (const _ of stream.values({ preventCancel: true }))
       return;
   }
@@ -1270,7 +1322,6 @@ class Source {
   const stream = new ReadableStream(source);
 
   async function read(stream) {
-    // eslint-disable-next-line no-unused-vars
     for await (const _ of stream.values({ preventCancel: false }))
       return;
   }
@@ -1320,11 +1371,14 @@ class Source {
   });
   assert.rejects(() => ReadableStream.prototype.cancel.call({}), {
     code: 'ERR_INVALID_THIS',
-  });
+  }).then(common.mustCall());
   assert.throws(() => ReadableStream.prototype.getReader.call({}), {
     code: 'ERR_INVALID_THIS',
   });
   assert.throws(() => ReadableStream.prototype.tee.call({}), {
+    code: 'ERR_INVALID_THIS',
+  });
+  assert.throws(() => ReadableStream.prototype.values.call({}), {
     code: 'ERR_INVALID_THIS',
   });
   assert.throws(() => ReadableStream.prototype[kTransfer].call({}), {
@@ -1332,15 +1386,15 @@ class Source {
   });
   assert.rejects(() => ReadableStreamDefaultReader.prototype.read.call({}), {
     code: 'ERR_INVALID_THIS',
-  });
+  }).then(common.mustCall());
   assert.rejects(() => ReadableStreamDefaultReader.prototype.cancel.call({}), {
     code: 'ERR_INVALID_THIS',
-  });
+  }).then(common.mustCall());
   assert.rejects(() => {
     return Reflect.get(ReadableStreamDefaultReader.prototype, 'closed');
   }, {
     code: 'ERR_INVALID_THIS',
-  });
+  }).then(common.mustCall());
   assert.throws(() => {
     ReadableStreamDefaultReader.prototype.releaseLock.call({});
   }, {
@@ -1348,7 +1402,7 @@ class Source {
   });
   assert.rejects(() => ReadableStreamBYOBReader.prototype.read.call({}), {
     code: 'ERR_INVALID_THIS',
-  });
+  }).then(common.mustCall());
   assert.throws(() => {
     ReadableStreamBYOBReader.prototype.releaseLock.call({});
   }, {
@@ -1358,10 +1412,10 @@ class Source {
     return Reflect.get(ReadableStreamBYOBReader.prototype, 'closed');
   }, {
     code: 'ERR_INVALID_THIS',
-  });
+  }).then(common.mustCall());
   assert.rejects(() => ReadableStreamBYOBReader.prototype.cancel.call({}), {
     code: 'ERR_INVALID_THIS',
-  });
+  }).then(common.mustCall());
 
   assert.throws(() => {
     Reflect.get(ReadableByteStreamController.prototype, 'byobRequest', {});
@@ -1410,10 +1464,12 @@ class Source {
 
   assert.strictEqual(
     inspect(readable),
-    'ReadableStream { locked: false, state: \'readable\' }');
+    'ReadableStream { locked: false, state: \'readable\', ' +
+    'supportsBYOB: false }');
   assert.strictEqual(
     inspect(readable, { depth: null }),
-    'ReadableStream { locked: false, state: \'readable\' }');
+    'ReadableStream { locked: false, state: \'readable\', ' +
+    'supportsBYOB: false }');
   assert.strictEqual(
     inspect(readable, { depth: 0 }),
     'ReadableStream [Object]');
@@ -1442,11 +1498,11 @@ class Source {
 
   assert.rejects(readableStreamPipeTo(1), {
     code: 'ERR_INVALID_ARG_TYPE',
-  });
+  }).then(common.mustCall());
 
   assert.rejects(readableStreamPipeTo(new ReadableStream(), 1), {
     code: 'ERR_INVALID_ARG_TYPE',
-  });
+  }).then(common.mustCall());
 
   assert.rejects(
     readableStreamPipeTo(
@@ -1458,7 +1514,7 @@ class Source {
       {}),
     {
       code: 'ERR_INVALID_ARG_TYPE',
-    });
+    }).then(common.mustCall());
 }
 
 {
@@ -1468,10 +1524,10 @@ class Source {
   reader.releaseLock();
   assert.rejects(reader.read(), {
     code: 'ERR_INVALID_STATE',
-  });
+  }).then(common.mustCall());
   assert.rejects(reader.cancel(), {
     code: 'ERR_INVALID_STATE',
-  });
+  }).then(common.mustCall());
 }
 
 {
@@ -1519,7 +1575,7 @@ class Source {
   assert(!readableStreamDefaultControllerCanCloseOrEnqueue(controller));
   readableStreamDefaultControllerEnqueue(controller);
   readableByteStreamControllerClose(controller);
-  readableByteStreamControllerEnqueue(controller);
+  readableByteStreamControllerEnqueue(controller, new Uint8Array(1));
 }
 
 {
@@ -1569,4 +1625,79 @@ class Source {
     await reader.read();
     isDisturbed(stream, true);
   })().then(common.mustCall());
+}
+
+{
+  const stream = new ReadableStream({
+    pull: common.mustCall((controller) => {
+      controller.error(new Error());
+    }),
+  });
+
+  const reader = stream.getReader();
+  (async () => {
+    isErrored(stream, false);
+    await reader.read().catch(common.mustCall());
+    isErrored(stream, true);
+  })().then(common.mustCall());
+}
+
+{
+  const stream = new ReadableStream({
+    pull: common.mustCall((controller) => {
+      controller.error(new Error());
+    }),
+  });
+
+  const reader = stream.getReader();
+  (async () => {
+    isReadable(stream, true);
+    await reader.read().catch(common.mustCall());
+    isReadable(stream, false);
+  })().then(common.mustCall());
+}
+
+{
+  const stream = new ReadableStream({
+    type: 'bytes',
+    start(controller) {
+      controller.close();
+    }
+  });
+
+  const buffer = new ArrayBuffer(1024);
+  const reader = stream.getReader({ mode: 'byob' });
+
+  reader.read(new DataView(buffer))
+    .then(common.mustCall());
+}
+
+{
+  const stream = new ReadableStream({
+    type: 'bytes',
+    autoAllocateChunkSize: 128,
+    pull: common.mustCall((controller) => {
+      const view = controller.byobRequest.view;
+      const dest = new Uint8Array(
+        view.buffer,
+        view.byteOffset,
+        view.byteLength
+      );
+      dest.fill(1);
+      controller.byobRequest.respondWithNewView(dest);
+    }),
+  });
+
+  const reader = stream.getReader({ mode: 'byob' });
+
+  const buffer = new ArrayBuffer(10);
+  const view = new Uint8Array(
+    buffer,
+    1,
+    3
+  );
+
+  reader.read(view).then(common.mustCall(({ value }) => {
+    assert.deepStrictEqual(value, new Uint8Array([1, 1, 1]));
+  }));
 }

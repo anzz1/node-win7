@@ -19,19 +19,42 @@ namespace trap_handler {
 
 // X64 on Linux, Windows, MacOS, FreeBSD.
 #if V8_HOST_ARCH_X64 && V8_TARGET_ARCH_X64 &&                        \
-    ((V8_OS_LINUX && !V8_OS_ANDROID) || V8_OS_WIN || V8_OS_MACOSX || \
+    ((V8_OS_LINUX && !V8_OS_ANDROID) || V8_OS_WIN || V8_OS_DARWIN || \
      V8_OS_FREEBSD)
 #define V8_TRAP_HANDLER_SUPPORTED true
-// Arm64 (non-simulator) on Mac.
-#elif V8_TARGET_ARCH_ARM64 && V8_HOST_ARCH_ARM64 && V8_OS_MACOSX
+// Arm64 (non-simulator) on Mac and Linux.
+#elif V8_TARGET_ARCH_ARM64 && V8_HOST_ARCH_ARM64 && \
+    (V8_OS_DARWIN || (V8_OS_LINUX && !V8_OS_ANDROID))
 #define V8_TRAP_HANDLER_SUPPORTED true
-// Arm64 simulator on x64 on Linux or Mac.
-#elif V8_TARGET_ARCH_ARM64 && V8_HOST_ARCH_X64 && (V8_OS_LINUX || V8_OS_MACOSX)
+// Arm64 simulator on x64 on Linux, Mac, or Windows.
+//
+// The simulator case uses some inline assembly code, which cannot be
+// compiled with MSVC, so don't enable the trap handler in that case.
+// (MSVC #defines _MSC_VER, but so does Clang when targeting Windows, hence
+// the check for __clang__.)
+#elif V8_TARGET_ARCH_ARM64 && V8_HOST_ARCH_X64 && \
+    (V8_OS_LINUX || V8_OS_DARWIN || V8_OS_WIN) && \
+    (!defined(_MSC_VER) || defined(__clang__))
+#define V8_TRAP_HANDLER_VIA_SIMULATOR
+#define V8_TRAP_HANDLER_SUPPORTED true
+// Loong64 (non-simulator) on Linux.
+#elif V8_TARGET_ARCH_LOONG64 && V8_HOST_ARCH_LOONG64 && V8_OS_LINUX
+#define V8_TRAP_HANDLER_SUPPORTED true
+// Loong64 simulator on x64 on Linux
+#elif V8_TARGET_ARCH_LOONG64 && V8_HOST_ARCH_X64 && V8_OS_LINUX
 #define V8_TRAP_HANDLER_VIA_SIMULATOR
 #define V8_TRAP_HANDLER_SUPPORTED true
 // Everything else is unsupported.
 #else
 #define V8_TRAP_HANDLER_SUPPORTED false
+#endif
+
+#if V8_OS_ANDROID && V8_TRAP_HANDLER_SUPPORTED
+// It would require some careful security review before the trap handler
+// can be enabled on Android.  Android may do unexpected things with signal
+// handling and crash reporting that could open up security holes in V8's
+// trap handling.
+#error "The V8 trap handler should not be enabled on Android"
 #endif
 
 // Setup for shared library export.
@@ -91,14 +114,14 @@ void TH_EXPORT_PRIVATE ReleaseHandlerData(int index);
 
 // Initially false, set to true if when trap handlers are enabled. Never goes
 // back to false then.
-extern bool g_is_trap_handler_enabled;
+TH_EXPORT_PRIVATE extern bool g_is_trap_handler_enabled;
 
 // Initially true, set to false when either {IsTrapHandlerEnabled} or
 // {EnableTrapHandler} is called to prevent calling {EnableTrapHandler}
 // repeatedly, or after {IsTrapHandlerEnabled}. Needs to be atomic because
 // {IsTrapHandlerEnabled} can be called from any thread. Updated using relaxed
 // semantics, since it's not used for synchronization.
-extern std::atomic<bool> g_can_enable_trap_handler;
+TH_EXPORT_PRIVATE extern std::atomic<bool> g_can_enable_trap_handler;
 
 // Enables trap handling for WebAssembly bounds checks.
 //

@@ -58,9 +58,19 @@ void Builtins::Generate_KeyedStoreIC_Megamorphic(
   KeyedStoreGenericGenerator::Generate(state);
 }
 
+void Builtins::Generate_DefineKeyedOwnIC_Megamorphic(
+    compiler::CodeAssemblerState* state) {
+  DefineKeyedOwnGenericGenerator::Generate(state);
+}
+
 void Builtins::Generate_StoreIC_NoFeedback(
     compiler::CodeAssemblerState* state) {
   StoreICNoFeedbackGenerator::Generate(state);
+}
+
+void Builtins::Generate_DefineNamedOwnIC_NoFeedback(
+    compiler::CodeAssemblerState* state) {
+  DefineNamedOwnICNoFeedbackGenerator::Generate(state);
 }
 
 // All possible fast-to-fast transitions. Transitions to dictionary mode are not
@@ -82,7 +92,7 @@ void Builtins::Generate_StoreIC_NoFeedback(
 void HandlerBuiltinsAssembler::DispatchForElementsKindTransition(
     TNode<Int32T> from_kind, TNode<Int32T> to_kind,
     const ElementsKindTransitionSwitchCase& case_function) {
-  STATIC_ASSERT(sizeof(ElementsKind) == sizeof(uint8_t));
+  static_assert(sizeof(ElementsKind) == sizeof(uint8_t));
 
   Label next(this), if_unknown_type(this, Label::kDeferred);
 
@@ -101,7 +111,7 @@ void HandlerBuiltinsAssembler::DispatchForElementsKindTransition(
       ELEMENTS_KIND_TRANSITIONS(ELEMENTS_KINDS_CASE)
 #undef ELEMENTS_KINDS_CASE
   };
-  STATIC_ASSERT(arraysize(combined_elements_kinds) ==
+  static_assert(arraysize(combined_elements_kinds) ==
                 arraysize(elements_kind_labels));
 
   TNode<Int32T> combined_elements_kind =
@@ -142,7 +152,7 @@ void HandlerBuiltinsAssembler::Generate_ElementsTransitionAndStore(
 
   Label miss(this);
 
-  if (FLAG_trace_elements_transitions) {
+  if (v8_flags.trace_elements_transitions) {
     // Tracing elements transitions is the job of the runtime.
     Goto(&miss);
   } else {
@@ -189,6 +199,7 @@ TF_BUILTIN(ElementsTransitionAndStore_NoTransitionHandleCOW,
   V(PACKED_ELEMENTS)                 \
   V(PACKED_NONEXTENSIBLE_ELEMENTS)   \
   V(PACKED_SEALED_ELEMENTS)          \
+  V(SHARED_ARRAY_ELEMENTS)           \
   V(HOLEY_ELEMENTS)                  \
   V(HOLEY_NONEXTENSIBLE_ELEMENTS)    \
   V(HOLEY_SEALED_ELEMENTS)           \
@@ -237,7 +248,7 @@ void HandlerBuiltinsAssembler::DispatchByElementsKind(
       ELEMENTS_KINDS(ELEMENTS_KINDS_CASE)
 #undef ELEMENTS_KINDS_CASE
   };
-  STATIC_ASSERT(arraysize(elements_kinds) == arraysize(elements_kind_labels));
+  static_assert(arraysize(elements_kinds) == arraysize(elements_kind_labels));
 
   // TODO(mythria): Do not emit cases for typed elements kind when
   // handle_typed_elements is false to decrease the size of the jump table.
@@ -247,7 +258,7 @@ void HandlerBuiltinsAssembler::DispatchByElementsKind(
 #define ELEMENTS_KINDS_CASE(KIND)                                   \
   BIND(&if_##KIND);                                                 \
   {                                                                 \
-    if (!FLAG_enable_sealed_frozen_elements_kind &&                 \
+    if (!v8_flags.enable_sealed_frozen_elements_kind &&             \
         IsAnyNonextensibleElementsKindUnchecked(KIND)) {            \
       /* Disable support for frozen or sealed elements kinds. */    \
       Unreachable();                                                \

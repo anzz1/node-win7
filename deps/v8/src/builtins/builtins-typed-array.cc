@@ -27,13 +27,13 @@ BUILTIN(TypedArrayPrototypeBuffer) {
 namespace {
 
 int64_t CapRelativeIndex(Handle<Object> num, int64_t minimum, int64_t maximum) {
-  if (V8_LIKELY(num->IsSmi())) {
+  if (V8_LIKELY(IsSmi(*num))) {
     int64_t relative = Smi::ToInt(*num);
     return relative < 0 ? std::max<int64_t>(relative + maximum, minimum)
                         : std::min<int64_t>(relative, maximum);
   } else {
-    DCHECK(num->IsHeapNumber());
-    double relative = HeapNumber::cast(*num).value();
+    DCHECK(IsHeapNumber(*num));
+    double relative = HeapNumber::cast(*num)->value();
     DCHECK(!std::isnan(relative));
     return static_cast<int64_t>(
         relative < 0 ? std::max<double>(relative + maximum, minimum)
@@ -47,11 +47,12 @@ BUILTIN(TypedArrayPrototypeCopyWithin) {
   HandleScope scope(isolate);
 
   Handle<JSTypedArray> array;
-  const char* method = "%TypedArray%.prototype.copyWithin";
+  const char* method_name = "%TypedArray%.prototype.copyWithin";
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-      isolate, array, JSTypedArray::Validate(isolate, args.receiver(), method));
+      isolate, array,
+      JSTypedArray::Validate(isolate, args.receiver(), method_name));
 
-  int64_t len = array->length();
+  int64_t len = array->GetLength();
   int64_t to = 0;
   int64_t from = 0;
   int64_t final = len;
@@ -68,7 +69,7 @@ BUILTIN(TypedArrayPrototypeCopyWithin) {
       from = CapRelativeIndex(num, 0, len);
 
       Handle<Object> end = args.atOrUndefined(isolate, 3);
-      if (!end->IsUndefined(isolate)) {
+      if (!IsUndefined(*end, isolate)) {
         ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, num,
                                            Object::ToInteger(isolate, end));
         final = CapRelativeIndex(num, 0, len);
@@ -80,11 +81,37 @@ BUILTIN(TypedArrayPrototypeCopyWithin) {
   if (count <= 0) return *array;
 
   // TypedArray buffer may have been transferred/detached during parameter
-  // processing above. Return early in this case, to prevent potential UAF error
-  // TODO(caitp): throw here, as though the full algorithm were performed (the
-  // throw would have come from ecma262/#sec-integerindexedelementget)
-  // (see )
-  if (V8_UNLIKELY(array->WasDetached())) return *array;
+  // processing above.
+  if (V8_UNLIKELY(array->WasDetached())) {
+    THROW_NEW_ERROR_RETURN_FAILURE(
+        isolate, NewTypeError(MessageTemplate::kDetachedOperation,
+                              isolate->factory()->NewStringFromAsciiChecked(
+                                  method_name)));
+  }
+
+  if (V8_UNLIKELY(array->is_backed_by_rab())) {
+    bool out_of_bounds = false;
+    int64_t new_len = array->GetLengthOrOutOfBounds(out_of_bounds);
+    if (out_of_bounds) {
+      const MessageTemplate message = MessageTemplate::kDetachedOperation;
+      Handle<String> operation =
+          isolate->factory()->NewStringFromAsciiChecked(method_name);
+      THROW_NEW_ERROR_RETURN_FAILURE(isolate, NewTypeError(message, operation));
+    }
+    if (new_len < len) {
+      // We don't need to account for growing, since we only copy an already
+      // determined number of elements and growing won't change it. If to >
+      // new_len or from > new_len, the count below will be < 0, so we don't
+      // need to check them separately.
+      if (final > new_len) {
+        final = new_len;
+      }
+      count = std::min<int64_t>(final - from, new_len - to);
+      if (count <= 0) {
+        return *array;
+      }
+    }
+  }
 
   // Ensure processed indexes are within array bounds
   DCHECK_GE(from, 0);
@@ -99,7 +126,7 @@ BUILTIN(TypedArrayPrototypeCopyWithin) {
   count = count * element_size;
 
   uint8_t* data = static_cast<uint8_t*>(array->DataPtr());
-  if (array->buffer().is_shared()) {
+  if (array->buffer()->is_shared()) {
     base::Relaxed_Memmove(reinterpret_cast<base::Atomic8*>(data + to),
                           reinterpret_cast<base::Atomic8*>(data + from), count);
   } else {
@@ -113,9 +140,10 @@ BUILTIN(TypedArrayPrototypeFill) {
   HandleScope scope(isolate);
 
   Handle<JSTypedArray> array;
-  const char* method = "%TypedArray%.prototype.fill";
+  const char* method_name = "%TypedArray%.prototype.fill";
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-      isolate, array, JSTypedArray::Validate(isolate, args.receiver(), method));
+      isolate, array,
+      JSTypedArray::Validate(isolate, args.receiver(), method_name));
   ElementsKind kind = array->GetElementsKind();
 
   Handle<Object> obj_value = args.atOrUndefined(isolate, 1);
@@ -133,13 +161,13 @@ BUILTIN(TypedArrayPrototypeFill) {
 
   if (args.length() > 2) {
     Handle<Object> num = args.atOrUndefined(isolate, 2);
-    if (!num->IsUndefined(isolate)) {
+    if (!IsUndefined(*num, isolate)) {
       ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
           isolate, num, Object::ToInteger(isolate, num));
       start = CapRelativeIndex(num, 0, len);
 
       num = args.atOrUndefined(isolate, 3);
-      if (!num->IsUndefined(isolate)) {
+      if (!IsUndefined(*num, isolate)) {
         ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
             isolate, num, Object::ToInteger(isolate, num));
         end = CapRelativeIndex(num, 0, len);
@@ -147,17 +175,21 @@ BUILTIN(TypedArrayPrototypeFill) {
     }
   }
 
+  if (V8_UNLIKELY(array->WasDetached())) {
+    THROW_NEW_ERROR_RETURN_FAILURE(
+        isolate, NewTypeError(MessageTemplate::kDetachedOperation,
+                              isolate->factory()->NewStringFromAsciiChecked(
+                                  method_name)));
+  }
+
   if (V8_UNLIKELY(array->IsVariableLength())) {
-    bool out_of_bounds = false;
-    array->GetLengthOrOutOfBounds(out_of_bounds);
-    if (out_of_bounds) {
+    if (array->IsOutOfBounds()) {
       const MessageTemplate message = MessageTemplate::kDetachedOperation;
       Handle<String> operation =
-          isolate->factory()->NewStringFromAsciiChecked(method);
+          isolate->factory()->NewStringFromAsciiChecked(method_name);
       THROW_NEW_ERROR_RETURN_FAILURE(isolate, NewTypeError(message, operation));
     }
-  } else if (V8_UNLIKELY(array->WasDetached())) {
-    return *array;
+    end = std::min(end, static_cast<int64_t>(array->GetLength()));
   }
 
   int64_t count = end - start;
@@ -178,13 +210,14 @@ BUILTIN(TypedArrayPrototypeIncludes) {
   HandleScope scope(isolate);
 
   Handle<JSTypedArray> array;
-  const char* method = "%TypedArray%.prototype.includes";
+  const char* method_name = "%TypedArray%.prototype.includes";
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-      isolate, array, JSTypedArray::Validate(isolate, args.receiver(), method));
+      isolate, array,
+      JSTypedArray::Validate(isolate, args.receiver(), method_name));
 
   if (args.length() < 2) return ReadOnlyRoots(isolate).false_value();
 
-  int64_t len = array->length();
+  int64_t len = array->GetLength();
   if (len == 0) return ReadOnlyRoots(isolate).false_value();
 
   int64_t index = 0;
@@ -194,10 +227,6 @@ BUILTIN(TypedArrayPrototypeIncludes) {
         isolate, num, Object::ToInteger(isolate, args.at<Object>(2)));
     index = CapRelativeIndex(num, 0, len);
   }
-
-  // TODO(cwhan.tunz): throw. See the above comment in CopyWithin.
-  if (V8_UNLIKELY(array->WasDetached()))
-    return ReadOnlyRoots(isolate).false_value();
 
   Handle<Object> search_element = args.atOrUndefined(isolate, 1);
   ElementsAccessor* elements = array->GetElementsAccessor();
@@ -211,11 +240,12 @@ BUILTIN(TypedArrayPrototypeIndexOf) {
   HandleScope scope(isolate);
 
   Handle<JSTypedArray> array;
-  const char* method = "%TypedArray%.prototype.indexOf";
+  const char* method_name = "%TypedArray%.prototype.indexOf";
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-      isolate, array, JSTypedArray::Validate(isolate, args.receiver(), method));
+      isolate, array,
+      JSTypedArray::Validate(isolate, args.receiver(), method_name));
 
-  int64_t len = array->length();
+  int64_t len = array->GetLength();
   if (len == 0) return Smi::FromInt(-1);
 
   int64_t index = 0;
@@ -226,8 +256,11 @@ BUILTIN(TypedArrayPrototypeIndexOf) {
     index = CapRelativeIndex(num, 0, len);
   }
 
-  // TODO(cwhan.tunz): throw. See the above comment in CopyWithin.
   if (V8_UNLIKELY(array->WasDetached())) return Smi::FromInt(-1);
+
+  if (V8_UNLIKELY(array->IsVariableLength() && array->IsOutOfBounds())) {
+    return Smi::FromInt(-1);
+  }
 
   Handle<Object> search_element = args.atOrUndefined(isolate, 1);
   ElementsAccessor* elements = array->GetElementsAccessor();
@@ -241,11 +274,12 @@ BUILTIN(TypedArrayPrototypeLastIndexOf) {
   HandleScope scope(isolate);
 
   Handle<JSTypedArray> array;
-  const char* method = "%TypedArray%.prototype.lastIndexOf";
+  const char* method_name = "%TypedArray%.prototype.lastIndexOf";
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-      isolate, array, JSTypedArray::Validate(isolate, args.receiver(), method));
+      isolate, array,
+      JSTypedArray::Validate(isolate, args.receiver(), method_name));
 
-  int64_t len = array->length();
+  int64_t len = array->GetLength();
   if (len == 0) return Smi::FromInt(-1);
 
   int64_t index = len - 1;
@@ -260,8 +294,10 @@ BUILTIN(TypedArrayPrototypeLastIndexOf) {
 
   if (index < 0) return Smi::FromInt(-1);
 
-  // TODO(cwhan.tunz): throw. See the above comment in CopyWithin.
   if (V8_UNLIKELY(array->WasDetached())) return Smi::FromInt(-1);
+  if (V8_UNLIKELY(array->IsVariableLength() && array->IsOutOfBounds())) {
+    return Smi::FromInt(-1);
+  }
 
   Handle<Object> search_element = args.atOrUndefined(isolate, 1);
   ElementsAccessor* elements = array->GetElementsAccessor();
@@ -275,9 +311,10 @@ BUILTIN(TypedArrayPrototypeReverse) {
   HandleScope scope(isolate);
 
   Handle<JSTypedArray> array;
-  const char* method = "%TypedArray%.prototype.reverse";
+  const char* method_name = "%TypedArray%.prototype.reverse";
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-      isolate, array, JSTypedArray::Validate(isolate, args.receiver(), method));
+      isolate, array,
+      JSTypedArray::Validate(isolate, args.receiver(), method_name));
 
   ElementsAccessor* elements = array->GetElementsAccessor();
   elements->Reverse(*array);

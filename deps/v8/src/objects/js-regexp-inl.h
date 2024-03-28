@@ -25,17 +25,17 @@ TQ_OBJECT_CONSTRUCTORS_IMPL(JSRegExpResult)
 TQ_OBJECT_CONSTRUCTORS_IMPL(JSRegExpResultIndices)
 TQ_OBJECT_CONSTRUCTORS_IMPL(JSRegExpResultWithIndices)
 
-ACCESSORS(JSRegExp, last_index, Object, kLastIndexOffset)
+ACCESSORS(JSRegExp, last_index, Tagged<Object>, kLastIndexOffset)
 
-JSRegExp::Type JSRegExp::TypeTag() const {
-  Object data = this->data();
-  if (data.IsUndefined()) return JSRegExp::NOT_COMPILED;
-  Smi smi = Smi::cast(FixedArray::cast(data).get(kTagIndex));
+JSRegExp::Type JSRegExp::type_tag() const {
+  Tagged<Object> data = this->data();
+  if (IsUndefined(data)) return JSRegExp::NOT_COMPILED;
+  Tagged<Smi> smi = Smi::cast(FixedArray::cast(data)->get(kTagIndex));
   return static_cast<JSRegExp::Type>(smi.value());
 }
 
-int JSRegExp::CaptureCount() const {
-  switch (TypeTag()) {
+int JSRegExp::capture_count() const {
+  switch (type_tag()) {
     case ATOM:
       return 0;
     case EXPERIMENTAL:
@@ -46,52 +46,50 @@ int JSRegExp::CaptureCount() const {
   }
 }
 
-int JSRegExp::MaxRegisterCount() const {
-  CHECK_EQ(TypeTag(), IRREGEXP);
+int JSRegExp::max_register_count() const {
+  CHECK_EQ(type_tag(), IRREGEXP);
   return Smi::ToInt(DataAt(kIrregexpMaxRegisterCountIndex));
 }
 
-JSRegExp::Flags JSRegExp::GetFlags() const {
-  DCHECK(this->data().IsFixedArray());
-  Object data = this->data();
-  Smi smi = Smi::cast(FixedArray::cast(data).get(kFlagsIndex));
+Tagged<String> JSRegExp::atom_pattern() const {
+  DCHECK_EQ(type_tag(), ATOM);
+  return String::cast(DataAt(JSRegExp::kAtomPatternIndex));
+}
+
+Tagged<String> JSRegExp::source() const {
+  return String::cast(TorqueGeneratedClass::source());
+}
+
+JSRegExp::Flags JSRegExp::flags() const {
+  Tagged<Smi> smi = Smi::cast(TorqueGeneratedClass::flags());
   return Flags(smi.value());
 }
 
-String JSRegExp::Pattern() {
-  DCHECK(this->data().IsFixedArray());
-  Object data = this->data();
-  String pattern = String::cast(FixedArray::cast(data).get(kSourceIndex));
-  return pattern;
+// static
+const char* JSRegExp::FlagsToString(Flags flags, FlagsBuffer* out_buffer) {
+  int cursor = 0;
+  FlagsBuffer& buffer = *out_buffer;
+#define V(Lower, Camel, LowerCamel, Char, Bit) \
+  if (flags & JSRegExp::k##Camel) buffer[cursor++] = Char;
+  REGEXP_FLAG_LIST(V)
+#undef V
+  buffer[cursor++] = '\0';
+  return buffer.begin();
 }
 
-String JSRegExp::EscapedPattern() {
-  DCHECK(this->source().IsString());
-  String pattern = String::cast(source());
-  return pattern;
+Tagged<String> JSRegExp::EscapedPattern() {
+  DCHECK(IsString(source()));
+  return String::cast(source());
 }
 
-Object JSRegExp::CaptureNameMap() {
-  DCHECK(this->data().IsFixedArray());
-  DCHECK(TypeSupportsCaptures(TypeTag()));
-  Object value = DataAt(kIrregexpCaptureNameMapIndex);
+Tagged<Object> JSRegExp::capture_name_map() {
+  DCHECK(TypeSupportsCaptures(type_tag()));
+  Tagged<Object> value = DataAt(kIrregexpCaptureNameMapIndex);
   DCHECK_NE(value, Smi::FromInt(JSRegExp::kUninitializedValue));
   return value;
 }
 
-Object JSRegExp::DataAt(int index) const {
-  DCHECK(TypeTag() != NOT_COMPILED);
-  return FixedArray::cast(data()).get(index);
-}
-
-void JSRegExp::SetDataAt(int index, Object value) {
-  DCHECK(TypeTag() != NOT_COMPILED);
-  DCHECK_GE(index,
-            kDataIndex);  // Only implementation data can be set this way.
-  FixedArray::cast(data()).set(index, value);
-}
-
-void JSRegExp::SetCaptureNameMap(Handle<FixedArray> capture_name_map) {
+void JSRegExp::set_capture_name_map(Handle<FixedArray> capture_name_map) {
   if (capture_name_map.is_null()) {
     SetDataAt(JSRegExp::kIrregexpCaptureNameMapIndex, Smi::zero());
   } else {
@@ -99,17 +97,29 @@ void JSRegExp::SetCaptureNameMap(Handle<FixedArray> capture_name_map) {
   }
 }
 
+Tagged<Object> JSRegExp::DataAt(int index) const {
+  DCHECK(type_tag() != NOT_COMPILED);
+  return FixedArray::cast(data())->get(index);
+}
+
+void JSRegExp::SetDataAt(int index, Tagged<Object> value) {
+  DCHECK(type_tag() != NOT_COMPILED);
+  // Only implementation data can be set this way.
+  DCHECK_GE(index, kFirstTypeSpecificIndex);
+  FixedArray::cast(data())->set(index, value);
+}
+
 bool JSRegExp::HasCompiledCode() const {
-  if (TypeTag() != IRREGEXP) return false;
-  Smi uninitialized = Smi::FromInt(kUninitializedValue);
+  if (type_tag() != IRREGEXP) return false;
+  Tagged<Smi> uninitialized = Smi::FromInt(kUninitializedValue);
 #ifdef DEBUG
-  DCHECK(DataAt(kIrregexpLatin1CodeIndex).IsCodeT() ||
+  DCHECK(IsCode(DataAt(kIrregexpLatin1CodeIndex)) ||
          DataAt(kIrregexpLatin1CodeIndex) == uninitialized);
-  DCHECK(DataAt(kIrregexpUC16CodeIndex).IsCodeT() ||
+  DCHECK(IsCode(DataAt(kIrregexpUC16CodeIndex)) ||
          DataAt(kIrregexpUC16CodeIndex) == uninitialized);
-  DCHECK(DataAt(kIrregexpLatin1BytecodeIndex).IsByteArray() ||
+  DCHECK(IsByteArray(DataAt(kIrregexpLatin1BytecodeIndex)) ||
          DataAt(kIrregexpLatin1BytecodeIndex) == uninitialized);
-  DCHECK(DataAt(kIrregexpUC16BytecodeIndex).IsByteArray() ||
+  DCHECK(IsByteArray(DataAt(kIrregexpUC16BytecodeIndex)) ||
          DataAt(kIrregexpUC16BytecodeIndex) == uninitialized);
 #endif  // DEBUG
   return (DataAt(kIrregexpLatin1CodeIndex) != uninitialized ||
@@ -118,7 +128,7 @@ bool JSRegExp::HasCompiledCode() const {
 
 void JSRegExp::DiscardCompiledCodeForSerialization() {
   DCHECK(HasCompiledCode());
-  Smi uninitialized = Smi::FromInt(kUninitializedValue);
+  Tagged<Smi> uninitialized = Smi::FromInt(kUninitializedValue);
   SetDataAt(kIrregexpLatin1CodeIndex, uninitialized);
   SetDataAt(kIrregexpUC16CodeIndex, uninitialized);
   SetDataAt(kIrregexpLatin1BytecodeIndex, uninitialized);

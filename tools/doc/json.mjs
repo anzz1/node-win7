@@ -104,10 +104,10 @@ export function jsonAPI({ filename }) {
           nodes.slice(0, i).every((node) => node.type === 'list')
         ) {
           const text = textJoin(node.children[0].children, file);
-          const stability = text.match(stabilityExpr);
+          const stability = stabilityExpr.exec(text);
           if (stability) {
             current.stability = parseInt(stability[1], 10);
-            current.stabilityText = stability[2].trim();
+            current.stabilityText = stability[2].replaceAll('\n', ' ').trim();
             delete nodes[i];
           }
         }
@@ -128,7 +128,7 @@ export function jsonAPI({ filename }) {
       switch (current.type) {
         case 'ctor':
         case 'classMethod':
-        case 'method':
+        case 'method': {
           // Each item is an argument, unless the name is 'return',
           // in which case it's the return value.
           const sig = {};
@@ -142,7 +142,7 @@ export function jsonAPI({ filename }) {
           parseSignature(current.textRaw, sig);
           current.signatures = [sig];
           break;
-
+        }
         case 'property':
           // There should be only one item, which is the value.
           // Copy the data up to the section.
@@ -349,7 +349,7 @@ function parseSignature(text, sig) {
           throw new Error(
             `Invalid param "${sigParam}"\n` +
             ` > ${JSON.stringify(listParam)}\n` +
-            ` > ${text}`
+            ` > ${text}`,
           );
         }
       }
@@ -376,7 +376,7 @@ function parseListItem(item, file) {
 
   current.textRaw = item.children.filter((node) => node.type !== 'list')
     .map((node) => (
-      file.value.slice(node.position.start.offset, node.position.end.offset))
+      file.value.slice(node.position.start.offset, node.position.end.offset)),
     )
     .join('').replace(/\s+/g, ' ').replace(/<!--.*?-->/sg, '');
   let text = current.textRaw;

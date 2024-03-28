@@ -1,5 +1,5 @@
 /*
- * Copyright 1999-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1999-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -71,6 +71,11 @@ static int kdf_pbkdf1_do_derive(const unsigned char *pass, size_t passlen,
     mdsize = EVP_MD_size(md_type);
     if (mdsize < 0)
         goto err;
+    if (n > (size_t)mdsize) {
+        ERR_raise(ERR_LIB_PROV, PROV_R_LENGTH_TOO_LARGE);
+        goto err;
+    }
+
     for (i = 1; i < iter; i++) {
         if (!EVP_DigestInit_ex(ctx, md_type, NULL))
             goto err;
@@ -83,6 +88,7 @@ static int kdf_pbkdf1_do_derive(const unsigned char *pass, size_t passlen,
     memcpy(out, md_tmp, n);
     ret = 1;
 err:
+    OPENSSL_cleanse(md_tmp, EVP_MAX_MD_SIZE);
     EVP_MD_CTX_free(ctx);
     return ret;
 }
@@ -134,13 +140,15 @@ static int kdf_pbkdf1_set_membuf(unsigned char **buffer, size_t *buflen,
                              const OSSL_PARAM *p)
 {
     OPENSSL_clear_free(*buffer, *buflen);
+    *buffer = NULL;
+    *buflen = 0;
+
     if (p->data_size == 0) {
         if ((*buffer = OPENSSL_malloc(1)) == NULL) {
             ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
             return 0;
         }
     } else if (p->data != NULL) {
-        *buffer = NULL;
         if (!OSSL_PARAM_get_octet_string(p, (void **)buffer, 0, buflen))
             return 0;
     }

@@ -49,11 +49,8 @@ class EphemeronHolderTraceEphemeron
 };
 
 class EphemeronPairTest : public testing::TestWithHeap {
-  using MarkingConfig = Marker::MarkingConfig;
-
-  static constexpr Marker::MarkingConfig IncrementalPreciseMarkingConfig = {
-      MarkingConfig::CollectionType::kMajor,
-      MarkingConfig::StackState::kNoHeapPointers,
+  static constexpr MarkingConfig IncrementalPreciseMarkingConfig = {
+      CollectionType::kMajor, StackState::kNoHeapPointers,
       MarkingConfig::MarkingType::kIncremental};
 
  public:
@@ -63,15 +60,17 @@ class EphemeronPairTest : public testing::TestWithHeap {
   }
 
   void FinishMarking() {
-    marker_->FinishMarking(MarkingConfig::StackState::kNoHeapPointers);
+    marker_->FinishMarking(StackState::kNoHeapPointers);
     // Pretend do finish sweeping as StatsCollector verifies that Notify*
     // methods are called in the right order.
-    Heap::From(GetHeap())->stats_collector()->NotifySweepingCompleted();
+    Heap::From(GetHeap())->stats_collector()->NotifySweepingCompleted(
+        GCConfig::SweepingType::kIncremental);
   }
 
   void InitializeMarker(HeapBase& heap, cppgc::Platform* platform) {
-    marker_ = MarkerFactory::CreateAndStartMarking<Marker>(
-        heap, platform, IncrementalPreciseMarkingConfig);
+    marker_ = std::make_unique<Marker>(heap, platform,
+                                       IncrementalPreciseMarkingConfig);
+    marker_->StartMarking();
   }
 
   Marker* marker() const { return marker_.get(); }
@@ -79,15 +78,14 @@ class EphemeronPairTest : public testing::TestWithHeap {
  private:
   bool SingleStep() {
     return marker_->IncrementalMarkingStepForTesting(
-        MarkingConfig::StackState::kNoHeapPointers);
+        StackState::kNoHeapPointers);
   }
 
   std::unique_ptr<Marker> marker_;
 };
 
 // static
-constexpr Marker::MarkingConfig
-    EphemeronPairTest::IncrementalPreciseMarkingConfig;
+constexpr MarkingConfig EphemeronPairTest::IncrementalPreciseMarkingConfig;
 
 }  // namespace
 
@@ -240,6 +238,51 @@ TEST_F(EphemeronPairTest, EphemeronPairWithEmptyMixinValue) {
   InitializeMarker(*Heap::From(GetHeap()), GetPlatformHandle().get());
   FinishSteps();
   FinishMarking();
+}
+
+namespace {
+
+class KeyWithCallback final : public GarbageCollected<KeyWithCallback> {
+ public:
+  template <typename Callback>
+  explicit KeyWithCallback(Callback callback) {
+    callback(this);
+  }
+  void Trace(Visitor*) const {}
+};
+
+class EphemeronHolderForKeyWithCallback final
+    : public GarbageCollected<EphemeronHolderForKeyWithCallback> {
+ public:
+  EphemeronHolderForKeyWithCallback(KeyWithCallback* key, GCed* value)
+      : ephemeron_pair_(key, value) {}
+  void Trace(cppgc::Visitor* visitor) const { visitor->Trace(ephemeron_pair_); }
+
+ private:
+  const EphemeronPair<KeyWithCallback, GCed> ephemeron_pair_;
+};
+
+}  // namespace
+
+TEST_F(EphemeronPairTest, EphemeronPairWithKeyInConstruction) {
+  GCed* value = MakeGarbageCollected<GCed>(GetAllocationHandle());
+  Persistent<EphemeronHolderForKeyWithCallback> holder;
+  InitializeMarker(*Heap::From(GetHeap()), GetPlatformHandle().get());
+  FinishSteps();
+  MakeGarbageCollected<KeyWithCallback>(
+      GetAllocationHandle(), [this, &holder, value](KeyWithCallback* thiz) {
+        // The test doesn't use conservative stack scanning to retain key to
+        // avoid retaining value as a side effect.
+        EXPECT_TRUE(HeapObjectHeader::FromObject(thiz).TryMarkAtomic());
+        holder = MakeGarbageCollected<EphemeronHolderForKeyWithCallback>(
+            GetAllocationHandle(), thiz, value);
+        // Finishing marking at this point will leave an ephemeron pair
+        // reachable where the key is still in construction. The GC needs to
+        // mark the value for such pairs as live in the atomic pause as they key
+        // is considered live.
+        FinishMarking();
+      });
+  EXPECT_TRUE(HeapObjectHeader::FromObject(value).IsMarked());
 }
 
 }  // namespace internal

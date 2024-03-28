@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2019-2024 The OpenSSL Project Authors. All Rights Reserved.
  * Copyright (c) 2019, Oracle and/or its affiliates.  All rights reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
@@ -57,8 +57,14 @@ static int prepare_from_text(const OSSL_PARAM *paramdefs, const char *key,
         if (r == 0 || *tmpbn == NULL)
             return 0;
 
+        if (p->data_type == OSSL_PARAM_UNSIGNED_INTEGER
+            && BN_is_negative(*tmpbn)) {
+            ERR_raise(ERR_LIB_CRYPTO, CRYPTO_R_INVALID_NEGATIVE_VALUE);
+            return 0;
+        }
+
         /*
-         * 2s complement negate, part 1
+         * 2's complement negate, part 1
          *
          * BN_bn2nativepad puts the absolute value of the number in the
          * buffer, i.e. if it's negative, we need to deal with it.  We do
@@ -73,6 +79,20 @@ static int prepare_from_text(const OSSL_PARAM *paramdefs, const char *key,
         }
 
         buf_bits = (size_t)BN_num_bits(*tmpbn);
+
+        /*
+         * Compensate for cases where the most significant bit in
+         * the resulting OSSL_PARAM buffer will be set after the
+         * BN_bn2nativepad() call, as the implied sign may not be
+         * correct after the second part of the 2's complement
+         * negation has been performed.
+         * We fix these cases by extending the buffer by one byte
+         * (8 bits), which will give some padding.  The second part
+         * of the 2's complement negation will do the rest.
+         */
+        if (p->data_type == OSSL_PARAM_INTEGER && buf_bits % 8 == 0)
+            buf_bits += 8;
+
         *buf_n = (buf_bits + 7) / 8;
 
         /*
@@ -80,9 +100,7 @@ static int prepare_from_text(const OSSL_PARAM *paramdefs, const char *key,
          * range checking if a size is specified.
          */
         if (p->data_size > 0) {
-            if (buf_bits > p->data_size * 8
-                || (p->data_type == OSSL_PARAM_INTEGER
-                    && buf_bits == p->data_size * 8)) {
+            if (buf_bits > p->data_size * 8) {
                 ERR_raise(ERR_LIB_CRYPTO, CRYPTO_R_TOO_SMALL_BUFFER);
                 /* Since this is a different error, we don't break */
                 return 0;
@@ -100,7 +118,13 @@ static int prepare_from_text(const OSSL_PARAM *paramdefs, const char *key,
         break;
     case OSSL_PARAM_OCTET_STRING:
         if (*ishex) {
-            *buf_n = strlen(value) >> 1;
+            size_t hexdigits = strlen(value);
+            if ((hexdigits % 2) != 0) {
+                /* We don't accept an odd number of hex digits */
+                ERR_raise(ERR_LIB_CRYPTO, CRYPTO_R_ODD_NUMBER_OF_DIGITS);
+                return 0;
+            }
+            *buf_n = hexdigits >> 1;
         } else {
             *buf_n = value_n;
         }
@@ -132,7 +156,7 @@ static int construct_from_text(OSSL_PARAM *to, const OSSL_PARAM *paramdef,
             BN_bn2nativepad(tmpbn, buf, buf_n);
 
             /*
-             * 2s complement negate, part two.
+             * 2's complement negation, part two.
              *
              * Because we did the first part on the BIGNUM itself, we can just
              * invert all the bytes here and be done with it.

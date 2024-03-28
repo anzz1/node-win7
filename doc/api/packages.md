@@ -18,9 +18,14 @@ changes:
     description: Add package `"imports"` field.
   - version:
     - v13.7.0
+    - v12.17.0
+    pr-url: https://github.com/nodejs/node/pull/29866
+    description: Unflag conditional exports.
+  - version:
+    - v13.7.0
     - v12.16.0
     pr-url: https://github.com/nodejs/node/pull/31001
-    description: Unflag conditional exports.
+    description: Remove the `--experimental-conditional-exports` option. In 12.16.0, conditional exports are still behind `--experimental-modules`.
   - version:
     - v13.6.0
     - v12.16.0
@@ -50,38 +55,107 @@ along with a reference for the [`package.json`][] fields defined by Node.js.
 
 ## Determining module system
 
+### Introduction
+
 Node.js will treat the following as [ES modules][] when passed to `node` as the
-initial input, or when referenced by `import` statements within ES module code:
+initial input, or when referenced by `import` statements or `import()`
+expressions:
 
-* Files ending in `.mjs`.
+* Files with an `.mjs` extension.
 
-* Files ending in `.js` when the nearest parent `package.json` file contains a
-  top-level [`"type"`][] field with a value of `"module"`.
+* Files with a `.js` extension when the nearest parent `package.json` file
+  contains a top-level [`"type"`][] field with a value of `"module"`.
 
 * Strings passed in as an argument to `--eval`, or piped to `node` via `STDIN`,
   with the flag `--input-type=module`.
 
-Node.js will treat as [CommonJS][] all other forms of input, such as `.js` files
-where the nearest parent `package.json` file contains no top-level `"type"`
-field, or string input without the flag `--input-type`. This behavior is to
-preserve backward compatibility. However, now that Node.js supports both
-CommonJS and ES modules, it is best to be explicit whenever possible. Node.js
-will treat the following as CommonJS when passed to `node` as the initial input,
-or when referenced by `import` statements within ES module code:
+* When using [`--experimental-detect-module`][], code containing syntax only
+  successfully parsed as [ES modules][], such as `import` or `export`
+  statements or `import.meta`, having no explicit marker of how it should be
+  interpreted. Explicit markers are `.mjs` or `.cjs` extensions, `package.json`
+  `"type"` fields with either `"module"` or `"commonjs"` values, or
+  `--input-type` or `--experimental-default-type` flags. Dynamic `import()`
+  expressions are supported in either CommonJS or ES modules and would not
+  cause a file to be treated as an ES module.
 
-* Files ending in `.cjs`.
+Node.js will treat the following as [CommonJS][] when passed to `node` as the
+initial input, or when referenced by `import` statements or `import()`
+expressions:
 
-* Files ending in `.js` when the nearest parent `package.json` file contains a
-  top-level field [`"type"`][] with a value of `"commonjs"`.
+* Files with a `.cjs` extension.
+
+* Files with a `.js` extension when the nearest parent `package.json` file
+  contains a top-level field [`"type"`][] with a value of `"commonjs"`.
 
 * Strings passed in as an argument to `--eval` or `--print`, or piped to `node`
   via `STDIN`, with the flag `--input-type=commonjs`.
 
-Package authors should include the [`"type"`][] field, even in packages where
-all sources are CommonJS. Being explicit about the `type` of the package will
-future-proof the package in case the default type of Node.js ever changes, and
-it will also make things easier for build tools and loaders to determine how the
-files in the package should be interpreted.
+Aside from these explicit cases, there are other cases where Node.js defaults to
+one module system or the other based on the value of the
+[`--experimental-default-type`][] flag:
+
+* Files ending in `.js` or with no extension, if there is no `package.json` file
+  present in the same folder or any parent folder.
+
+* Files ending in `.js` or with no extension, if the nearest parent
+  `package.json` field lacks a `"type"` field; unless the folder is inside a
+  `node_modules` folder. (Package scopes under `node_modules` are always treated
+  as CommonJS when the `package.json` file lacks a `"type"` field, regardless
+  of `--experimental-default-type`, for backward compatibility.)
+
+* Strings passed in as an argument to `--eval` or piped to `node` via `STDIN`,
+  when `--input-type` is unspecified.
+
+This flag currently defaults to `"commonjs"`, but it may change in the future to
+default to `"module"`. For this reason it is best to be explicit wherever
+possible; in particular, package authors should always include the [`"type"`][]
+field in their `package.json` files, even in packages where all sources are
+CommonJS. Being explicit about the `type` of the package will future-proof the
+package in case the default type of Node.js ever changes, and it will also make
+things easier for build tools and loaders to determine how the files in the
+package should be interpreted.
+
+### Modules loaders
+
+Node.js has two systems for resolving a specifier and loading modules.
+
+There is the CommonJS module loader:
+
+* It is fully synchronous.
+* It is responsible for handling `require()` calls.
+* It is monkey patchable.
+* It supports [folders as modules][].
+* When resolving a specifier, if no exact match is found, it will try to add
+  extensions (`.js`, `.json`, and finally `.node`) and then attempt to resolve
+  [folders as modules][].
+* It treats `.json` as JSON text files.
+* `.node` files are interpreted as compiled addon modules loaded with
+  `process.dlopen()`.
+* It treats all files that lack `.json` or `.node` extensions as JavaScript
+  text files.
+* It can only be used to [load ECMASCript modules from CommonJS modules][] if
+  the module graph is synchronous (that contains no top-level `await`) when
+  `--experimental-require-module` is enabled.
+  When used to load a JavaScript text file that is not an ECMAScript module,
+  the file will be loaded as a CommonJS module.
+
+There is the ECMAScript module loader:
+
+* It is asynchronous, unless it's being used to load modules for `require()`.
+* It is responsible for handling `import` statements and `import()` expressions.
+* It is not monkey patchable, can be customized using [loader hooks][].
+* It does not support folders as modules, directory indexes (e.g.
+  `'./startup/index.js'`) must be fully specified.
+* It does no extension searching. A file extension must be provided
+  when the specifier is a relative or absolute file URL.
+* It can load JSON modules, but an import assertion is required.
+* It accepts only `.js`, `.mjs`, and `.cjs` extensions for JavaScript text
+  files.
+* It can be used to load JavaScript CommonJS modules. Such modules
+  are passed through the `cjs-module-lexer` to try to identify named exports,
+  which are available if they can be determined through static analysis.
+  Imported CommonJS modules have their URLs converted to absolute
+  paths and are then loaded via the CommonJS module loader.
 
 ### `package.json` and file extensions
 
@@ -150,9 +224,9 @@ Strings passed in as an argument to `--eval` (or `-e`), or piped to `node` via
 is set.
 
 ```bash
-node --input-type=module --eval "import { sep } from 'path'; console.log(sep);"
+node --input-type=module --eval "import { sep } from 'node:path'; console.log(sep);"
 
-echo "import { sep } from 'path'; console.log(sep);" | node --input-type=module
+echo "import { sep } from 'node:path'; console.log(sep);" | node --input-type=module
 ```
 
 For completeness there is also `--input-type=commonjs`, for explicitly running
@@ -176,91 +250,99 @@ in your project's `package.json`.
 
 ## Package entry points
 
-In a package’s `package.json` file, two fields can define entry points for a
-package: [`"main"`][] and [`"exports"`][]. The [`"main"`][] field is supported
-in all versions of Node.js, but its capabilities are limited: it only defines
-the main entry point of the package.
+In a package's `package.json` file, two fields can define entry points for a
+package: [`"main"`][] and [`"exports"`][]. Both fields apply to both ES module
+and CommonJS module entry points.
 
-The [`"exports"`][] field provides an alternative to [`"main"`][] where the
-package main entry point can be defined while also encapsulating the package,
-**preventing any other entry points besides those defined in [`"exports"`][]**.
-This encapsulation allows module authors to define a public interface for
-their package.
+The [`"main"`][] field is supported in all versions of Node.js, but its
+capabilities are limited: it only defines the main entry point of the package.
 
-If both [`"exports"`][] and [`"main"`][] are defined, the [`"exports"`][] field
-takes precedence over [`"main"`][]. [`"exports"`][] are not specific to ES
-modules or CommonJS; [`"main"`][] is overridden by [`"exports"`][] if it
-exists. As such [`"main"`][] cannot be used as a fallback for CommonJS but it
-can be used as a fallback for legacy versions of Node.js that do not support the
-[`"exports"`][] field.
+The [`"exports"`][] provides a modern alternative to [`"main"`][] allowing
+multiple entry points to be defined, conditional entry resolution support
+between environments, and **preventing any other entry points besides those
+defined in [`"exports"`][]**. This encapsulation allows module authors to
+clearly define the public interface for their package.
+
+For new packages targeting the currently supported versions of Node.js, the
+[`"exports"`][] field is recommended. For packages supporting Node.js 10 and
+below, the [`"main"`][] field is required. If both [`"exports"`][] and
+[`"main"`][] are defined, the [`"exports"`][] field takes precedence over
+[`"main"`][] in supported versions of Node.js.
 
 [Conditional exports][] can be used within [`"exports"`][] to define different
 package entry points per environment, including whether the package is
 referenced via `require` or via `import`. For more information about supporting
-both CommonJS and ES Modules in a single package please consult
+both CommonJS and ES modules in a single package please consult
 [the dual CommonJS/ES module packages section][].
 
-**Warning**: Introducing the [`"exports"`][] field prevents consumers of a
-package from using any entry points that are not defined, including the
-[`package.json`][] (e.g. `require('your-package/package.json')`. **This will
+Existing packages introducing the [`"exports"`][] field will prevent consumers
+of the package from using any entry points that are not defined, including the
+[`package.json`][] (e.g. `require('your-package/package.json')`). **This will
 likely be a breaking change.**
 
 To make the introduction of [`"exports"`][] non-breaking, ensure that every
 previously supported entry point is exported. It is best to explicitly specify
-entry points so that the package’s public API is well-defined. For example,
-a project that previous exported `main`, `lib`,
+entry points so that the package's public API is well-defined. For example,
+a project that previously exported `main`, `lib`,
 `feature`, and the `package.json` could use the following `package.exports`:
 
 ```json
 {
-  "name": "my-mod",
+  "name": "my-package",
   "exports": {
     ".": "./lib/index.js",
     "./lib": "./lib/index.js",
     "./lib/index": "./lib/index.js",
     "./lib/index.js": "./lib/index.js",
     "./feature": "./feature/index.js",
+    "./feature/index": "./feature/index.js",
     "./feature/index.js": "./feature/index.js",
     "./package.json": "./package.json"
   }
 }
 ```
 
-Alternatively a project could choose to export entire folders:
+Alternatively a project could choose to export entire folders both with and
+without extensioned subpaths using export patterns:
 
 ```json
 {
-  "name": "my-mod",
+  "name": "my-package",
   "exports": {
     ".": "./lib/index.js",
     "./lib": "./lib/index.js",
     "./lib/*": "./lib/*.js",
+    "./lib/*.js": "./lib/*.js",
     "./feature": "./feature/index.js",
     "./feature/*": "./feature/*.js",
+    "./feature/*.js": "./feature/*.js",
     "./package.json": "./package.json"
   }
 }
 ```
 
-As a last resort, package encapsulation can be disabled entirely by creating an
-export for the root of the package `"./*": "./*"`. This exposes every file
-in the package at the cost of disabling the encapsulation and potential tooling
-benefits this provides. As the ES Module loader in Node.js enforces the use of
-[the full specifier path][], exporting the root rather than being explicit
-about entry is less expressive than either of the prior examples. Not only
-is encapsulation lost but module consumers are unable to
-`import feature from 'my-mod/feature'` as they need to provide the full
-path `import feature from 'my-mod/feature/index.js`.
-
-### Main entry point export
-
-To set the main entry point for a package, it is advisable to define both
-[`"exports"`][] and [`"main"`][] in the package’s [`package.json`][] file:
+With the above providing backwards-compatibility for any minor package versions,
+a future major change for the package can then properly restrict the exports
+to only the specific feature exports exposed:
 
 ```json
 {
-  "main": "./main.js",
-  "exports": "./main.js"
+  "name": "my-package",
+  "exports": {
+    ".": "./lib/index.js",
+    "./feature/*.js": "./feature/*.js",
+    "./feature/internal/*": null
+  }
+}
+```
+
+### Main entry point export
+
+When writing a new package, it is recommended to use the [`"exports"`][] field:
+
+```json
+{
+  "exports": "./index.js"
 }
 ```
 
@@ -275,6 +357,18 @@ package. It is not a strong encapsulation since a direct require of any
 absolute subpath of the package such as
 `require('/path/to/node_modules/pkg/subpath.js')` will still load `subpath.js`.
 
+All currently supported versions of Node.js and modern build tools support the
+`"exports"` field. For projects using an older version of Node.js or a related
+build tool, compatibility can be achieved by including the `"main"` field
+alongside `"exports"` pointing to the same module:
+
+```json
+{
+  "main": "./index.js",
+  "exports": "./index.js"
+}
+```
+
 ### Subpath exports
 
 <!-- YAML
@@ -287,10 +381,9 @@ with the main entry point by treating the main entry point as the
 
 ```json
 {
-  "main": "./main.js",
   "exports": {
-    ".": "./main.js",
-    "./submodule": "./src/submodule.js"
+    ".": "./index.js",
+    "./submodule.js": "./src/submodule.js"
   }
 }
 ```
@@ -298,7 +391,7 @@ with the main entry point by treating the main entry point as the
 Now only the defined subpath in [`"exports"`][] can be imported by a consumer:
 
 ```js
-import submodule from 'es-module-package/submodule';
+import submodule from 'es-module-package/submodule.js';
 // Loads ./node_modules/es-module-package/src/submodule.js
 ```
 
@@ -309,6 +402,51 @@ import submodule from 'es-module-package/private-module.js';
 // Throws ERR_PACKAGE_PATH_NOT_EXPORTED
 ```
 
+#### Extensions in subpaths
+
+Package authors should provide either extensioned (`import 'pkg/subpath.js'`) or
+extensionless (`import 'pkg/subpath'`) subpaths in their exports. This ensures
+that there is only one subpath for each exported module so that all dependents
+import the same consistent specifier, keeping the package contract clear for
+consumers and simplifying package subpath completions.
+
+Traditionally, packages tended to use the extensionless style, which has the
+benefits of readability and of masking the true path of the file within the
+package.
+
+With [import maps][] now providing a standard for package resolution in browsers
+and other JavaScript runtimes, using the extensionless style can result in
+bloated import map definitions. Explicit file extensions can avoid this issue by
+enabling the import map to utilize a [packages folder mapping][] to map multiple
+subpaths where possible instead of a separate map entry per package subpath
+export. This also mirrors the requirement of using [the full specifier path][]
+in relative and absolute import specifiers.
+
+### Exports sugar
+
+<!-- YAML
+added: v12.11.0
+-->
+
+If the `"."` export is the only export, the [`"exports"`][] field provides sugar
+for this case being the direct [`"exports"`][] field value.
+
+```json
+{
+  "exports": {
+    ".": "./index.js"
+  }
+}
+```
+
+can be written:
+
+```json
+{
+  "exports": "./index.js"
+}
+```
+
 ### Subpath imports
 
 <!-- YAML
@@ -317,12 +455,12 @@ added:
   - v12.19.0
 -->
 
-In addition to the [`"exports"`][] field, it is possible to define internal
-package import maps that only apply to import specifiers from within the package
-itself.
+In addition to the [`"exports"`][] field, there is a package `"imports"` field
+to create private mappings that only apply to import specifiers from within the
+package itself.
 
-Entries in the imports field must always start with `#` to ensure they are
-disambiguated from package specifiers.
+Entries in the `"imports"` field must always start with `#` to ensure they are
+disambiguated from external package specifiers.
 
 For example, the imports field can be used to gain the benefits of conditional
 exports for internal modules:
@@ -349,8 +487,8 @@ file `./dep-polyfill.js` relative to the package in other environments.
 Unlike the `"exports"` field, the `"imports"` field permits mapping to external
 packages.
 
-The resolution rules for the imports field are otherwise
-analogous to the exports field.
+The resolution rules for the imports field are otherwise analogous to the
+exports field.
 
 ### Subpath patterns
 
@@ -358,6 +496,17 @@ analogous to the exports field.
 added:
   - v14.13.0
   - v12.20.0
+changes:
+  - version:
+    - v16.10.0
+    - v14.19.0
+    pr-url: https://github.com/nodejs/node/pull/40041
+    description: Support pattern trailers in "imports" field.
+  - version:
+    - v16.9.0
+    - v14.19.0
+    pr-url: https://github.com/nodejs/node/pull/39635
+    description: Support pattern trailers.
 -->
 
 For packages with a small number of exports or imports, we recommend
@@ -371,10 +520,10 @@ For these use cases, subpath export patterns can be used instead:
 // ./node_modules/es-module-package/package.json
 {
   "exports": {
-    "./features/*": "./src/features/*.js"
+    "./features/*.js": "./src/features/*.js"
   },
   "imports": {
-    "#internal/*": "./src/internal/*.js"
+    "#internal/*.js": "./src/internal/*.js"
   }
 }
 ```
@@ -386,19 +535,19 @@ All instances of `*` on the right hand side will then be replaced with this
 value, including if it contains any `/` separators.
 
 ```js
-import featureX from 'es-module-package/features/x';
+import featureX from 'es-module-package/features/x.js';
 // Loads ./node_modules/es-module-package/src/features/x.js
 
-import featureY from 'es-module-package/features/y/y';
+import featureY from 'es-module-package/features/y/y.js';
 // Loads ./node_modules/es-module-package/src/features/y/y.js
 
-import internalZ from '#internal/z';
+import internalZ from '#internal/z.js';
 // Loads ./node_modules/es-module-package/src/internal/z.js
 ```
 
-This is a direct static replacement without any special handling for file
-extensions. In the previous example, `pkg/features/x.json` would be resolved to
-`./src/features/x.json.js` in the mapping.
+This is a direct static matching and replacement without any special handling
+for file extensions. Including the `"*.js"` on both sides of the mapping
+restricts the exposed package exports to only JS files.
 
 The property of exports being statically enumerable is maintained with exports
 patterns since the individual exports for a package can be determined by
@@ -412,46 +561,18 @@ To exclude private subfolders from patterns, `null` targets can be used:
 // ./node_modules/es-module-package/package.json
 {
   "exports": {
-    "./features/*": "./src/features/*.js",
+    "./features/*.js": "./src/features/*.js",
     "./features/private-internal/*": null
   }
 }
 ```
 
 ```js
-import featureInternal from 'es-module-package/features/private-internal/m';
+import featureInternal from 'es-module-package/features/private-internal/m.js';
 // Throws: ERR_PACKAGE_PATH_NOT_EXPORTED
 
-import featureX from 'es-module-package/features/x';
+import featureX from 'es-module-package/features/x.js';
 // Loads ./node_modules/es-module-package/src/features/x.js
-```
-
-### Exports sugar
-
-<!-- YAML
-added: v12.11.0
--->
-
-If the `"."` export is the only export, the [`"exports"`][] field provides sugar
-for this case being the direct [`"exports"`][] field value.
-
-If the `"."` export has a fallback array or string value, then the
-[`"exports"`][] field can be set to this value directly.
-
-```json
-{
-  "exports": {
-    ".": "./main.js"
-  }
-}
-```
-
-can be written:
-
-```json
-{
-  "exports": "./main.js"
-}
 ```
 
 ### Conditional exports
@@ -477,17 +598,25 @@ For example, a package that wants to provide different ES module exports for
 ```json
 // package.json
 {
-  "main": "./main-require.cjs",
   "exports": {
-    "import": "./main-module.js",
-    "require": "./main-require.cjs"
+    "import": "./index-module.js",
+    "require": "./index-require.cjs"
   },
   "type": "module"
 }
 ```
 
-Node.js implements the following conditions:
+Node.js implements the following conditions, listed in order from most
+specific to least specific as conditions should be defined:
 
+* `"node-addons"` - similar to `"node"` and matches for any Node.js environment.
+  This condition can be used to provide an entry point which uses native C++
+  addons as opposed to an entry point which is more universal and doesn't rely
+  on native addons. This condition can be disabled via the
+  [`--no-addons` flag][].
+* `"node"` - matches for any Node.js environment. Can be a CommonJS or ES
+  module file. _In most cases explicitly calling out the Node.js platform is
+  not necessary._
 * `"import"` - matches when the package is loaded via `import` or
   `import()`, or via any top-level import or resolve operation by the
   ECMAScript module loader. Applies regardless of the module format of the
@@ -495,17 +624,9 @@ Node.js implements the following conditions:
 * `"require"` - matches when the package is loaded via `require()`. The
   referenced file should be loadable with `require()` although the condition
   matches regardless of the module format of the target file. Expected
-  formats include CommonJS, JSON, and native addons but not ES modules as
-  `require()` doesn't support them. _Always mutually exclusive with
-  `"import"`._
-* `"node"` - matches for any Node.js environment. Can be a CommonJS or ES
-  module file. _This condition should always come after `"import"` or
-  `"require"`._
-* `"node-addons"` - similar to `"node"` and matches for any Node.js environment.
-  This condition can be used to provide an entry point which uses native C++
-  addons as opposed to an entry point which is more universal and doesn't rely
-  on native addons. This condition can be disabled via the
-  [`--no-addons` flag][].
+  formats include CommonJS, JSON, native addons, and ES modules
+  if `--experimental-require-module` is enabled. _Always mutually
+  exclusive with `"import"`._
 * `"default"` - the generic fallback that always matches. Can be a CommonJS
   or ES module file. _This condition should always come last._
 
@@ -517,14 +638,19 @@ least specific in object order_.
 Using the `"import"` and `"require"` conditions can lead to some hazards,
 which are further explained in [the dual CommonJS/ES module packages section][].
 
+The `"node-addons"` condition can be used to provide an entry point which
+uses native C++ addons. However, this condition can be disabled via the
+[`--no-addons` flag][]. When using `"node-addons"`, it's recommended to treat
+`"default"` as an enhancement that provides a more universal entry point, e.g.
+using WebAssembly instead of a native addon.
+
 Conditional exports can also be extended to exports subpaths, for example:
 
 ```json
 {
-  "main": "./main.js",
   "exports": {
-    ".": "./main.js",
-    "./feature": {
+    ".": "./index.js",
+    "./feature.js": {
       "node": "./feature-node.js",
       "default": "./feature.js"
     }
@@ -532,9 +658,9 @@ Conditional exports can also be extended to exports subpaths, for example:
 }
 ```
 
-Defines a package where `require('pkg/feature')` and `import 'pkg/feature'`
-could provide different implementations between Node.js and other JS
-environments.
+Defines a package where `require('pkg/feature.js')` and
+`import 'pkg/feature.js'` could provide different implementations between
+Node.js and other JS environments.
 
 When using environment branches, always include a `"default"` condition where
 possible. Providing a `"default"` condition ensures that any unknown JS
@@ -553,13 +679,12 @@ use in Node.js but not the browser:
 
 ```json
 {
-  "main": "./main.js",
   "exports": {
     "node": {
       "import": "./feature-node.mjs",
       "require": "./feature-node.cjs"
     },
-    "default": "./feature.mjs",
+    "default": "./feature.mjs"
   }
 }
 ```
@@ -581,7 +706,7 @@ When running Node.js, custom user conditions can be added with the
 `--conditions` flag:
 
 ```bash
-node --conditions=development main.js
+node --conditions=development index.js
 ```
 
 which would then resolve the `"development"` condition in package imports and
@@ -590,39 +715,31 @@ exports, while resolving the existing `"node"`, `"node-addons"`, `"default"`,
 
 Any number of custom conditions can be set with repeat flags.
 
-### Conditions Definitions
+### Community Conditions Definitions
 
-The `"import"`, `"require"`, `"node"`, `"node-addons"` and `"default"`
-conditions are defined and implemented in Node.js core,
-[as specified above](#conditional-exports).
+Condition strings other than the `"import"`, `"require"`, `"node"`,
+`"node-addons"` and `"default"` conditions
+[implemented in Node.js core](#conditional-exports) are ignored by default.
 
-The `"node-addons"` condition can be used to provide an entry point which
-uses native C++ addons. However, this condition can be disabled via the
-[`--no-addons` flag][]. When using `"node-addons"`, it's recommended to treat
-`"default"` as an enhancement that provides a more universal entry point, e.g.
-using WebAssembly instead of a native addon.
+Other platforms may implement other conditions and user conditions can be
+enabled in Node.js via the [`--conditions` / `-C` flag][].
 
-Other condition strings are unknown to Node.js and thus ignored by default.
-Runtimes or tools other than Node.js can use them at their discretion.
+Since custom package conditions require clear definitions to ensure correct
+usage, a list of common known package conditions and their strict definitions
+is provided below to assist with ecosystem coordination.
 
-These user conditions can be enabled in Node.js via the [`--conditions` flag][].
-
-The following condition definitions are currently endorsed by Node.js:
-
-* `"browser"` - any environment which implements a standard subset of global
-  browser APIs available from JavaScript in web browsers, including the DOM
-  APIs.
+* `"types"` - can be used by typing systems to resolve the typing file for
+  the given export. _This condition should always be included first._
+* `"browser"` - any web browser environment.
 * `"development"` - can be used to define a development-only environment
-  entry point. _Must always be mutually exclusive with `"production"`._
+  entry point, for example to provide additional debugging context such as
+  better error messages when running in a development mode. _Must always be
+  mutually exclusive with `"production"`._
 * `"production"` - can be used to define a production environment entry
   point. _Must always be mutually exclusive with `"development"`._
 
-The above user conditions can be enabled in Node.js via the
-[`--conditions` flag][].
-
-Platform specific conditions such as `"deno"`, `"electron"`, or `"react-native"`
-may be used, but while there remain no implementation or integration intent
-from these platforms, the above are not explicitly endorsed by Node.js.
+For other runtimes, platform-specific condition key definitions are maintained
+by the [WinterCG][] in the [Runtime Keys][] proposal specification.
 
 New conditions definitions may be added to this list by creating a pull request
 to the [Node.js documentation for this section][]. The requirements for listing
@@ -637,6 +754,10 @@ a new condition definition here are that:
   benefit to the ecosystem that wouldn't otherwise be possible. For example,
   this would not necessarily be the case for company-specific or
   application-specific conditions.
+* The condition should be such that a Node.js user would expect it to be in
+  Node.js core documentation. The `"types"` condition is a good example: It
+  doesn't really belong in the [Runtime Keys][] proposal but is a good fit
+  here in the Node.js docs.
 
 The above definitions may be moved to a dedicated conditions registry in due
 course.
@@ -655,8 +776,8 @@ changes:
     description: Unflag self-referencing a package using its name.
 -->
 
-Within a package, the values defined in the package’s
-`package.json` [`"exports"`][] field can be referenced via the package’s name.
+Within a package, the values defined in the package's
+`package.json` [`"exports"`][] field can be referenced via the package's name.
 For example, assuming the `package.json` is:
 
 ```json
@@ -664,8 +785,8 @@ For example, assuming the `package.json` is:
 {
   "name": "a-package",
   "exports": {
-    ".": "./main.mjs",
-    "./foo": "./foo.js"
+    ".": "./index.mjs",
+    "./foo.js": "./foo.js"
   }
 }
 ```
@@ -674,7 +795,7 @@ Then any module _in that package_ can reference an export in the package itself:
 
 ```js
 // ./a-module.mjs
-import { something } from 'a-package'; // Imports "something" from ./main.mjs.
+import { something } from 'a-package'; // Imports "something" from ./index.mjs.
 ```
 
 Self-referencing is available only if `package.json` has [`"exports"`][], and
@@ -696,7 +817,7 @@ and in a CommonJS one. For example, this code will also work:
 
 ```cjs
 // ./a-module.js
-const { something } = require('a-package/foo'); // Loads from ./foo.js.
+const { something } = require('a-package/foo.js'); // Loads from ./foo.js.
 ```
 
 Finally, self-referencing also works with scoped packages. For example, this
@@ -809,7 +930,6 @@ CommonJS entry point for `require`.
 // ./node_modules/pkg/package.json
 {
   "type": "module",
-  "main": "./index.cjs",
   "exports": {
     "import": "./wrapper.mjs",
     "require": "./index.cjs"
@@ -860,7 +980,7 @@ This approach is appropriate for any of the following use cases:
   install both this package and those other packages. For example a `utilities`
   package is used directly in an application, and a `utilities-plus` package
   adds a few more functions to `utilities`. Because the wrapper exports
-  underlying CommonJS files, it doesn’t matter if `utilities-plus` is written in
+  underlying CommonJS files, it doesn't matter if `utilities-plus` is written in
   CommonJS or ES module syntax; it will work either way.
 * The package stores internal state, and the package author would prefer not to
   refactor the package to isolate its state management. See the next section.
@@ -870,14 +990,13 @@ be to add an export, e.g. `"./module"`, to point to an all-ES module-syntax
 version of the package. This could be used via `import 'pkg/module'` by users
 who are certain that the CommonJS version will not be loaded anywhere in the
 application, such as by dependencies; or if the CommonJS version can be loaded
-but doesn’t affect the ES module version (for example, because the package is
+but doesn't affect the ES module version (for example, because the package is
 stateless):
 
 ```json
 // ./node_modules/pkg/package.json
 {
   "type": "module",
-  "main": "./index.cjs",
   "exports": {
     ".": "./index.cjs",
     "./module": "./wrapper.mjs"
@@ -894,7 +1013,6 @@ points directly:
 // ./node_modules/pkg/package.json
 {
   "type": "module",
-  "main": "./index.cjs",
   "exports": {
     "import": "./index.mjs",
     "require": "./index.cjs"
@@ -904,22 +1022,22 @@ points directly:
 
 This can be done if both the CommonJS and ES module versions of the package are
 equivalent, for example because one is the transpiled output of the other; and
-the package’s management of state is carefully isolated (or the package is
+the package's management of state is carefully isolated (or the package is
 stateless).
 
 The reason that state is an issue is because both the CommonJS and ES module
 versions of the package might get used within an application; for example, the
-user’s application code could `import` the ES module version while a dependency
+user's application code could `import` the ES module version while a dependency
 `require`s the CommonJS version. If that were to occur, two copies of the
 package would be loaded in memory and therefore two separate states would be
 present. This would likely cause hard-to-troubleshoot bugs.
 
-Aside from writing a stateless package (if JavaScript’s `Math` were a package,
+Aside from writing a stateless package (if JavaScript's `Math` were a package,
 for example, it would be stateless as all of its methods are static), there are
-some ways to isolate state so that it’s shared between the potentially loaded
+some ways to isolate state so that it's shared between the potentially loaded
 CommonJS and ES module instances of the package:
 
-1. If possible, contain all state within an instantiated object. JavaScript’s
+1. If possible, contain all state within an instantiated object. JavaScript's
    `Date`, for example, needs to be instantiated to contain state; if it were a
    package, it would be used like this:
 
@@ -929,7 +1047,7 @@ CommonJS and ES module instances of the package:
    // someDate contains state; Date does not
    ```
 
-   The `new` keyword isn’t required; a package’s function can return a new
+   The `new` keyword isn't required; a package's function can return a new
    object, or modify a passed-in object, to keep the state external to the
    package.
 
@@ -947,7 +1065,7 @@ CommonJS and ES module instances of the package:
    // ./node_modules/pkg/index.mjs
    import state from './state.cjs';
    export {
-     state
+     state,
    };
    ```
 
@@ -956,7 +1074,7 @@ CommonJS and ES module instances of the package:
    each reference of `pkg` will contain the same state; and modifying that
    state from either module system will apply to both.
 
-Any plugins that attach to the package’s singleton would need to separately
+Any plugins that attach to the package's singleton would need to separately
 attach to both the CommonJS and ES module singletons.
 
 This approach is appropriate for any of the following use cases:
@@ -980,7 +1098,6 @@ conditional exports for consumers could be to add an export, e.g.
 // ./node_modules/pkg/package.json
 {
   "type": "module",
-  "main": "./index.cjs",
   "exports": {
     ".": "./index.cjs",
     "./module": "./index.mjs"
@@ -991,7 +1108,7 @@ conditional exports for consumers could be to add an export, e.g.
 ## Node.js `package.json` field definitions
 
 This section describes the fields used by the Node.js runtime. Other tools (such
-as [npm](https://docs.npmjs.com/creating-a-package-json-file)) use
+as [npm](https://docs.npmjs.com/cli/v8/configuring-npm/package-json)) use
 additional fields which are ignored by Node.js and not documented here.
 
 The following fields in `package.json` files are used in Node.js:
@@ -1031,7 +1148,7 @@ changes:
 }
 ```
 
-The `"name"` field defines your package’s name. Publishing to the
+The `"name"` field defines your package's name. Publishing to the
 _npm_ registry requires a name that satisfies
 [certain requirements](https://docs.npmjs.com/files/package.json#name).
 
@@ -1048,25 +1165,30 @@ added: v0.4.0
 
 ```json
 {
-  "main": "./main.js"
+  "main": "./index.js"
 }
 ```
 
-The `"main"` field defines the script that is used when the [package directory
-is loaded via `require()`](modules.md#folders-as-modules). Its value
-is a path.
-
-```cjs
-require('./path/to/directory'); // This resolves to ./path/to/directory/main.js.
-```
+The `"main"` field defines the entry point of a package when imported by name
+via a `node_modules` lookup.  Its value is a path.
 
 When a package has an [`"exports"`][] field, this will take precedence over the
 `"main"` field when importing the package by name.
 
+It also defines the script that is used when the [package directory is loaded
+via `require()`](modules.md#folders-as-modules).
+
+```cjs
+// This resolves to ./path/to/directory/index.js.
+require('./path/to/directory');
+```
+
 ### `"packageManager"`
 
 <!-- YAML
-added: v16.9.0
+added:
+  - v16.9.0
+  - v14.19.0
 -->
 
 > Stability: 1 - Experimental
@@ -1080,9 +1202,9 @@ added: v16.9.0
 ```
 
 The `"packageManager"` field defines which package manager is expected to be
-used when working on the current project. It can set to any of the
+used when working on the current project. It can be set to any of the
 [supported package managers][], and will ensure that your teams use the exact
-same package manager versions without having to install anything else than
+same package manager versions without having to install anything else other than
 Node.js.
 
 This field is currently experimental and needs to be opted-in; check the
@@ -1110,7 +1232,7 @@ Files ending with `.js` are loaded as ES modules when the nearest parent
 `"module"`.
 
 The nearest parent `package.json` is defined as the first `package.json` found
-when searching in the current folder, that folder’s parent, and so on up
+when searching in the current folder, that folder's parent, and so on up
 until a node\_modules folder or the volume root is reached.
 
 ```json
@@ -1153,6 +1275,11 @@ changes:
     description: Add support for `"exports"` patterns.
   - version:
     - v13.7.0
+    - v12.17.0
+    pr-url: https://github.com/nodejs/node/pull/29866
+    description: Unflag conditional exports.
+  - version:
+    - v13.7.0
     - v12.16.0
     pr-url: https://github.com/nodejs/node/pull/31008
     description: Implement logical conditional exports ordering.
@@ -1160,7 +1287,7 @@ changes:
     - v13.7.0
     - v12.16.0
     pr-url: https://github.com/nodejs/node/pull/31001
-    description: Remove the `--experimental-conditional-exports` option.
+    description: Remove the `--experimental-conditional-exports` option. In 12.16.0, conditional exports are still behind `--experimental-modules`.
   - version:
     - v13.2.0
     - v12.16.0
@@ -1216,7 +1343,7 @@ added:
 
 Entries in the imports field must be strings starting with `#`.
 
-Import maps permit mapping to external packages.
+Package imports permit mapping to external packages.
 
 This field defines [subpath imports][] for the current package.
 
@@ -1227,18 +1354,27 @@ This field defines [subpath imports][] for the current package.
 [ES module]: esm.md
 [ES modules]: esm.md
 [Node.js documentation for this section]: https://github.com/nodejs/node/blob/HEAD/doc/api/packages.md#conditions-definitions
+[Runtime Keys]: https://runtime-keys.proposal.wintercg.org/
+[WinterCG]: https://wintercg.org/
 [`"exports"`]: #exports
 [`"imports"`]: #imports
 [`"main"`]: #main
 [`"name"`]: #name
 [`"packageManager"`]: #packagemanager
 [`"type"`]: #type
-[`--conditions` flag]: #resolving-user-conditions
+[`--conditions` / `-C` flag]: #resolving-user-conditions
+[`--experimental-default-type`]: cli.md#--experimental-default-typetype
+[`--experimental-detect-module`]: cli.md#--experimental-detect-module
 [`--no-addons` flag]: cli.md#--no-addons
 [`ERR_PACKAGE_PATH_NOT_EXPORTED`]: errors.md#err_package_path_not_exported
 [`esm`]: https://github.com/standard-things/esm#readme
 [`package.json`]: #nodejs-packagejson-field-definitions
 [entry points]: #package-entry-points
+[folders as modules]: modules.md#folders-as-modules
+[import maps]: https://github.com/WICG/import-maps
+[load ECMASCript modules from CommonJS modules]: modules.md#loading-ecmascript-modules-using-require
+[loader hooks]: esm.md#loaders
+[packages folder mapping]: https://github.com/WICG/import-maps#packages-via-trailing-slashes
 [self-reference]: #self-referencing-a-package-using-its-name
 [subpath exports]: #subpath-exports
 [subpath imports]: #subpath-imports

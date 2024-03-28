@@ -37,7 +37,7 @@ class SourceCodeCache final {
 
  private:
   Script::Type type_;
-  FixedArray cache_;
+  Tagged<FixedArray> cache_;
 };
 
 // The Boostrapper is the public interface for creating a JavaScript global
@@ -55,7 +55,7 @@ class Bootstrapper final {
 
   // Creates a JavaScript Global Context with initial object graph.
   // The returned value is a global handle casted to V8Environment*.
-  Handle<Context> CreateEnvironment(
+  Handle<NativeContext> CreateEnvironment(
       MaybeHandle<JSGlobalProxy> maybe_global_proxy,
       v8::Local<v8::ObjectTemplate> global_object_template,
       v8::ExtensionConfiguration* extensions, size_t context_snapshot_index,
@@ -64,7 +64,7 @@ class Bootstrapper final {
 
   // Used for testing context deserialization. No code runs in the generated
   // context. It only needs to pass heap verification.
-  Handle<Context> CreateEnvironmentForTesting() {
+  Handle<NativeContext> CreateEnvironmentForTesting() {
     MaybeHandle<JSGlobalProxy> no_global_proxy;
     v8::Local<v8::ObjectTemplate> no_global_object_template;
     ExtensionConfiguration no_extensions;
@@ -79,9 +79,6 @@ class Bootstrapper final {
   Handle<JSGlobalProxy> NewRemoteContext(
       MaybeHandle<JSGlobalProxy> maybe_global_proxy,
       v8::Local<v8::ObjectTemplate> global_object_template);
-
-  // Detach the environment from its outer global object.
-  void DetachGlobal(Handle<Context> env);
 
   // Traverses the pointers for memory management.
   void Iterate(RootVisitor* v);
@@ -131,6 +128,10 @@ class BootstrapperActive final {
  private:
   Bootstrapper* bootstrapper_;
 };
+
+V8_NOINLINE Handle<JSFunction> SimpleInstallFunction(
+    Isolate* isolate, Handle<JSObject> base, const char* name, Builtin call,
+    int len, bool adapt, PropertyAttributes attrs = DONT_ENUM);
 
 }  // namespace internal
 }  // namespace v8

@@ -8,28 +8,36 @@
 
 <!-- source_link=lib/net.js -->
 
-The `net` module provides an asynchronous network API for creating stream-based
+The `node:net` module provides an asynchronous network API for creating stream-based
 TCP or [IPC][] servers ([`net.createServer()`][]) and clients
 ([`net.createConnection()`][]).
 
 It can be accessed using:
 
 ```js
-const net = require('net');
+const net = require('node:net');
 ```
 
 ## IPC support
 
-The `net` module supports IPC with named pipes on Windows, and Unix domain
+<!-- YAML
+changes:
+  - version: v20.8.0
+    pr-url: https://github.com/nodejs/node/pull/49667
+    description: Support binding to abstract Unix domain socket path like `\0abstract`.
+                 We can bind '\0' for Node.js `< v20.4.0`.
+-->
+
+The `node:net` module supports IPC with named pipes on Windows, and Unix domain
 sockets on other operating systems.
 
 ### Identifying paths for IPC connections
 
-[`net.connect()`][], [`net.createConnection()`][], [`server.listen()`][] and
+[`net.connect()`][], [`net.createConnection()`][], [`server.listen()`][], and
 [`socket.connect()`][] take a `path` parameter to identify IPC endpoints.
 
 On Unix, the local domain is also known as the Unix domain. The path is a
-filesystem pathname. It gets truncated to an OS-dependent length of
+file system pathname. It gets truncated to an OS-dependent length of
 `sizeof(sockaddr_un.sun_path) - 1`. Typical values are 107 bytes on Linux and
 103 bytes on macOS. If a Node.js API abstraction creates the Unix domain socket,
 it will unlink the Unix domain socket as well. For example,
@@ -37,8 +45,11 @@ it will unlink the Unix domain socket as well. For example,
 [`server.close()`][] will unlink it. But if a user creates the Unix domain
 socket outside of these abstractions, the user will need to remove it. The same
 applies when a Node.js API creates a Unix domain socket but the program then
-crashes. In short, a Unix domain socket will be visible in the filesystem and
-will persist until unlinked.
+crashes. In short, a Unix domain socket will be visible in the file system and
+will persist until unlinked. On Linux, You can use Unix abstract socket by adding
+`\0` to the beginning of the path, such as `\0abstract`. The path to the Unix
+abstract socket is not visible in the file system and it will disappear automatically
+when all open references to the socket are closed.
 
 On Windows, the local domain is implemented using a named pipe. The path _must_
 refer to an entry in `\\?\pipe\` or `\\.\pipe\`. Any characters are permitted,
@@ -281,10 +292,37 @@ added: v0.1.90
 
 Emitted when the server has been bound after calling [`server.listen()`][].
 
+### Event: `'drop'`
+
+<!-- YAML
+added:
+  - v18.6.0
+  - v16.17.0
+-->
+
+When the number of connections reaches the threshold of `server.maxConnections`,
+the server will drop new connections and emit `'drop'` event instead. If it is a
+TCP server, the argument is as follows, otherwise the argument is `undefined`.
+
+* `data` {Object} The argument passed to event listener.
+  * `localAddress` {string}  Local address.
+  * `localPort` {number} Local port.
+  * `localFamily` {string} Local family.
+  * `remoteAddress` {string} Remote address.
+  * `remotePort` {number} Remote port.
+  * `remoteFamily` {string} Remote IP family. `'IPv4'` or `'IPv6'`.
+
 ### `server.address()`
 
 <!-- YAML
 added: v0.1.90
+changes:
+  - version: v18.4.0
+    pr-url: https://github.com/nodejs/node/pull/43054
+    description: The `family` property now returns a string instead of a number.
+  - version: v18.0.0
+    pr-url: https://github.com/nodejs/node/pull/41431
+    description: The `family` property now returns a number instead of a string.
 -->
 
 * Returns: {Object|string|null}
@@ -329,6 +367,19 @@ when all connections are ended and the server emits a [`'close'`][] event.
 The optional `callback` will be called once the `'close'` event occurs. Unlike
 that event, it will be called with an `Error` as its only argument if the server
 was not open when it was closed.
+
+### `server[Symbol.asyncDispose]()`
+
+<!-- YAML
+added:
+ - v20.5.0
+ - v18.18.0
+-->
+
+> Stability: 1 - Experimental
+
+Calls [`server.close()`][] and returns a promise that fulfills when the
+server has closed.
 
 ### `server.getConnections(callback)`
 
@@ -382,7 +433,7 @@ after a certain amount of time:
 ```js
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') {
-    console.log('Address in use, retrying...');
+    console.error('Address in use, retrying...');
     setTimeout(() => {
       server.close();
       server.listen(PORT, HOST);
@@ -460,9 +511,13 @@ shown below.
 server.listen({
   host: 'localhost',
   port: 80,
-  exclusive: true
+  exclusive: true,
 });
 ```
+
+When `exclusive` is `true` and the underlying handle is shared, it is
+possible that several workers query a handle with different backlogs.
+In this case, the first `backlog` passed to the master process will be used.
 
 Starting an IPC server as root may cause the server path to be inaccessible for
 unprivileged users. Using `readableAll` and `writableAll` will make the server
@@ -476,7 +531,7 @@ const controller = new AbortController();
 server.listen({
   host: 'localhost',
   port: 80,
-  signal: controller.signal
+  signal: controller.signal,
 });
 // Later, when you want to close the server.
 controller.abort();
@@ -534,6 +589,11 @@ added: v5.7.0
 
 <!-- YAML
 added: v0.2.0
+changes:
+  - version: v21.0.0
+    pr-url: https://github.com/nodejs/node/pull/48276
+    description: Setting `maxConnections` to `0` drops all the incoming
+                 connections. Previously, it was interpreted as `Infinity`.
 -->
 
 * {integer}
@@ -639,6 +699,53 @@ added: v0.1.90
 Emitted when a socket connection is successfully established.
 See [`net.createConnection()`][].
 
+### Event: `'connectionAttempt'`
+
+<!-- YAML
+added:
+  - v21.6.0
+  - v20.12.0
+-->
+
+* `ip` {string} The IP which the socket is attempting to connect to.
+* `port` {number} The port which the socket is attempting to connect to.
+* `family` {number} The family of the IP. It can be `6` for IPv6 or `4` for IPv4.
+
+Emitted when a new connection attempt is started. This may be emitted multiple times
+if the family autoselection algorithm is enabled in [`socket.connect(options)`][].
+
+### Event: `'connectionAttemptFailed'`
+
+<!-- YAML
+added:
+  - v21.6.0
+  - v20.12.0
+-->
+
+* `ip` {string} The IP which the socket attempted to connect to.
+* `port` {number} The port which the socket attempted to connect to.
+* `family` {number} The family of the IP. It can be `6` for IPv6 or `4` for IPv4.
+  \* `error` {Error} The error associated with the failure.
+
+Emitted when a connection attempt failed. This may be emitted multiple times
+if the family autoselection algorithm is enabled in [`socket.connect(options)`][].
+
+### Event: `'connectionAttemptTimeout'`
+
+<!-- YAML
+added:
+  - v21.6.0
+  - v20.12.0
+-->
+
+* `ip` {string} The IP which the socket attempted to connect to.
+* `port` {number} The port which the socket attempted to connect to.
+* `family` {number} The family of the IP. It can be `6` for IPv6 or `4` for IPv4.
+
+Emitted when a connection attempt timed out. This is only emitted (and may be
+emitted multiple times) if the family autoselection algorithm is enabled
+in [`socket.connect(options)`][].
+
 ### Event: `'data'`
 
 <!-- YAML
@@ -706,7 +813,7 @@ Not applicable to Unix sockets.
 
 * `err` {Error|null} The error object. See [`dns.lookup()`][].
 * `address` {string} The IP address.
-* `family` {string|null} The address type. See [`dns.lookup()`][].
+* `family` {number|null} The address type. See [`dns.lookup()`][].
 * `host` {string} The host name.
 
 ### Event: `'ready'`
@@ -734,6 +841,13 @@ See also: [`socket.setTimeout()`][].
 
 <!-- YAML
 added: v0.1.90
+changes:
+  - version: v18.4.0
+    pr-url: https://github.com/nodejs/node/pull/43054
+    description: The `family` property now returns a string instead of a number.
+  - version: v18.0.0
+    pr-url: https://github.com/nodejs/node/pull/41431
+    description: The `family` property now returns a number instead of a string.
 -->
 
 * Returns: {Object}
@@ -741,6 +855,22 @@ added: v0.1.90
 Returns the bound `address`, the address `family` name and `port` of the
 socket as reported by the operating system:
 `{ port: 12346, family: 'IPv4', address: '127.0.0.1' }`
+
+### `socket.autoSelectFamilyAttemptedAddresses`
+
+<!-- YAML
+added:
+ - v19.4.0
+ - v18.18.0
+-->
+
+* {string\[]}
+
+This property is only present if the family autoselection algorithm is enabled in
+[`socket.connect(options)`][] and it is an array of the addresses that have been attempted.
+
+Each address is a string in the form of `$IP:$PORT`. If the connection was successful,
+then the last address is the one that the socket is currently connected to.
 
 ### `socket.bufferSize`
 
@@ -818,6 +948,30 @@ behavior.
 <!-- YAML
 added: v0.1.90
 changes:
+  - version:
+      - v20.0.0
+      - v18.18.0
+    pr-url: https://github.com/nodejs/node/pull/46790
+    description: The default value for the autoSelectFamily option is now true.
+                 The `--enable-network-family-autoselection` CLI flag has been renamed
+                 to `--network-family-autoselection`. The old name is now an
+                 alias but it is discouraged.
+  - version: v19.4.0
+    pr-url: https://github.com/nodejs/node/pull/45777
+    description: The default value for autoSelectFamily option can be changed
+                 at runtime using `setDefaultAutoSelectFamily` or via the
+                 command line option `--enable-network-family-autoselection`.
+  - version:
+      - v19.3.0
+      - v18.13.0
+    pr-url: https://github.com/nodejs/node/pull/44731
+    description: Added the `autoSelectFamily` option.
+  - version:
+    - v17.7.0
+    - v16.15.0
+    pr-url: https://github.com/nodejs/node/pull/41310
+    description: The `noDelay`, `keepAlive`, and `keepAliveInitialDelay`
+                 options are supported now.
   - version: v12.10.0
     pr-url: https://github.com/nodejs/node/pull/25436
     description: Added `onread` option.
@@ -850,6 +1004,29 @@ For TCP connections, available `options` are:
   `0` indicates that both IPv4 and IPv6 addresses are allowed. **Default:** `0`.
 * `hints` {number} Optional [`dns.lookup()` hints][].
 * `lookup` {Function} Custom lookup function. **Default:** [`dns.lookup()`][].
+* `noDelay` {boolean} If set to `true`, it disables the use of Nagle's algorithm immediately
+  after the socket is established. **Default:** `false`.
+* `keepAlive` {boolean} If set to `true`, it enables keep-alive functionality on the socket
+  immediately after the connection is established, similarly on what is done in
+  [`socket.setKeepAlive([enable][, initialDelay])`][`socket.setKeepAlive(enable, initialDelay)`].
+  **Default:** `false`.
+* `keepAliveInitialDelay` {number} If set to a positive number, it sets the initial delay before
+  the first keepalive probe is sent on an idle socket.**Default:** `0`.
+* `autoSelectFamily` {boolean}: If set to `true`, it enables a family autodetection algorithm
+  that loosely implements section 5 of [RFC 8305][].
+  The `all` option passed to lookup is set to `true` and the sockets attempts to connect to all
+  obtained IPv6 and IPv4 addresses, in sequence, until a connection is established.
+  The first returned AAAA address is tried first, then the first returned A address,
+  then the second returned AAAA address and so on.
+  Each connection attempt (but the last one) is given the amount of time specified by the `autoSelectFamilyAttemptTimeout` option before timing out and trying the next address.
+  Ignored if the `family` option is not `0` or if `localAddress` is set.
+  Connection errors are not emitted if at least one connection succeeds.
+  If all connections attempts fails, a single `AggregateError` with all failed attempts is emitted.
+  **Default:** [`net.getDefaultAutoSelectFamily()`][]
+* `autoSelectFamilyAttemptTimeout` {number}: The amount of time in milliseconds to wait
+  for a connection attempt to finish before trying the next address when using the `autoSelectFamily` option.
+  If set to a positive integer less than `10`, then the value `10` will be used instead.
+  **Default:** [`net.getDefaultAutoSelectFamilyAttemptTimeout()`][]
 
 For [IPC][] connections, available `options` are:
 
@@ -876,7 +1053,7 @@ For both types, available `options` include:
 Following is an example of a client using the `onread` option:
 
 ```js
-const net = require('net');
+const net = require('node:net');
 net.connect({
   port: 80,
   onread: {
@@ -885,8 +1062,8 @@ net.connect({
     callback: function(nread, buf) {
       // Received data is available in `buf` from 0 to `nread`.
       console.log(buf.toString('utf8', 0, nread));
-    }
-  }
+    },
+  },
 });
 ```
 
@@ -959,6 +1136,16 @@ See [`writable.destroy()`][] for further details.
 
 See [`writable.destroyed`][] for further details.
 
+### `socket.destroySoon()`
+
+<!-- YAML
+added: v0.3.4
+-->
+
+Destroys the socket after all data is written. If the `'finish'` event was
+already emitted the socket is destroyed immediately. If the socket is still
+writable it implicitly calls `socket.end()`.
+
 ### `socket.end([data[, encoding]][, callback])`
 
 <!-- YAML
@@ -997,6 +1184,18 @@ added: v0.9.6
 * {integer}
 
 The numeric representation of the local port. For example, `80` or `21`.
+
+### `socket.localFamily`
+
+<!-- YAML
+added:
+  - v18.8.0
+  - v16.18.0
+-->
+
+* {string}
+
+The string representation of the local IP family. `'IPv4'` or `'IPv6'`.
 
 ### `socket.pause()`
 
@@ -1051,7 +1250,8 @@ added: v0.11.14
 
 * {string}
 
-The string representation of the remote IP family. `'IPv4'` or `'IPv6'`.
+The string representation of the remote IP family. `'IPv4'` or `'IPv6'`. Value may be `undefined` if
+the socket is destroyed (for example, if the client disconnected).
 
 ### `socket.remotePort`
 
@@ -1061,7 +1261,23 @@ added: v0.5.10
 
 * {integer}
 
-The numeric representation of the remote port. For example, `80` or `21`.
+The numeric representation of the remote port. For example, `80` or `21`. Value may be `undefined` if
+the socket is destroyed (for example, if the client disconnected).
+
+### `socket.resetAndDestroy()`
+
+<!-- YAML
+added:
+  - v18.3.0
+  - v16.17.0
+-->
+
+* Returns: {net.Socket}
+
+Close the TCP connection by sending an RST packet and destroy the stream.
+If this TCP socket is in connecting status, it will send an RST packet and destroy this TCP socket once it is connected.
+Otherwise, it will call `socket.destroy` with an `ERR_SOCKET_CLOSED` Error.
+If this is not a TCP socket (for example, a pipe), calling this method will immediately throw an `ERR_INVALID_HANDLE_TYPE` Error.
 
 ### `socket.resume()`
 
@@ -1136,6 +1352,12 @@ algorithm.
 
 <!-- YAML
 added: v0.1.90
+changes:
+  - version: v18.0.0
+    pr-url: https://github.com/nodejs/node/pull/41678
+    description: Passing an invalid callback to the `callback` argument
+                 now throws `ERR_INVALID_ARG_TYPE` instead of
+                 `ERR_INVALID_CALLBACK`.
 -->
 
 * `timeout` {number}
@@ -1326,7 +1548,7 @@ Following is an example of a client of the echo server described
 in the [`net.createServer()`][] section:
 
 ```js
-const net = require('net');
+const net = require('node:net');
 const client = net.createConnection({ port: 8124 }, () => {
   // 'connect' listener.
   console.log('connected to server!');
@@ -1397,16 +1619,41 @@ then returns the `net.Socket` that starts the connection.
 
 <!-- YAML
 added: v0.5.0
+changes:
+  - version:
+    - v20.1.0
+    - v18.17.0
+    pr-url: https://github.com/nodejs/node/pull/47405
+    description: The `highWaterMark` option is supported now.
+  - version:
+    - v17.7.0
+    - v16.15.0
+    pr-url: https://github.com/nodejs/node/pull/41310
+    description: The `noDelay`, `keepAlive`, and `keepAliveInitialDelay`
+                 options are supported now.
 -->
 
 * `options` {Object}
   * `allowHalfOpen` {boolean} If set to `false`, then the socket will
     automatically end the writable side when the readable side ends.
     **Default:** `false`.
+  * `highWaterMark` {number} Optionally overrides all [`net.Socket`][]s'
+    `readableHighWaterMark` and `writableHighWaterMark`.
+    **Default:** See [`stream.getDefaultHighWaterMark()`][].
   * `pauseOnConnect` {boolean} Indicates whether the socket should be
     paused on incoming connections. **Default:** `false`.
+  * `noDelay` {boolean} If set to `true`, it disables the use of Nagle's algorithm immediately
+    after a new incoming connection is received. **Default:** `false`.
+  * `keepAlive` {boolean} If set to `true`, it enables keep-alive functionality on the socket
+    immediately after a new incoming connection is received, similarly on what is done in
+    [`socket.setKeepAlive([enable][, initialDelay])`][`socket.setKeepAlive(enable, initialDelay)`].
+    **Default:** `false`.
+  * `keepAliveInitialDelay` {number} If set to a positive number, it sets the initial delay before
+    the first keepalive probe is sent on an idle socket.**Default:** `0`.
+
 * `connectionListener` {Function} Automatically set as a listener for the
   [`'connection'`][] event.
+
 * Returns: {net.Server}
 
 Creates a new TCP or [IPC][] server.
@@ -1428,11 +1675,11 @@ read by the original process. To begin reading data from a paused socket, call
 The server can be a TCP server or an [IPC][] server, depending on what it
 [`listen()`][`server.listen()`] to.
 
-Here is an example of an TCP echo server which listens for connections
+Here is an example of a TCP echo server which listens for connections
 on port 8124:
 
 ```js
-const net = require('net');
+const net = require('node:net');
 const server = net.createServer((c) => {
   // 'connection' listener.
   console.log('client connected');
@@ -1452,8 +1699,8 @@ server.listen(8124, () => {
 
 Test this by using `telnet`:
 
-```console
-$ telnet localhost 8124
+```bash
+telnet localhost 8124
 ```
 
 To listen on the socket `/tmp/echo.sock`:
@@ -1466,9 +1713,57 @@ server.listen('/tmp/echo.sock', () => {
 
 Use `nc` to connect to a Unix domain socket server:
 
-```console
-$ nc -U /tmp/echo.sock
+```bash
+nc -U /tmp/echo.sock
 ```
+
+## `net.getDefaultAutoSelectFamily()`
+
+<!-- YAML
+added: v19.4.0
+-->
+
+Gets the current default value of the `autoSelectFamily` option of [`socket.connect(options)`][].
+The initial default value is `true`, unless the command line option
+`--no-network-family-autoselection` is provided.
+
+* Returns: {boolean} The current default value of the `autoSelectFamily` option.
+
+## `net.setDefaultAutoSelectFamily(value)`
+
+<!-- YAML
+added: v19.4.0
+-->
+
+Sets the default value of the `autoSelectFamily` option of [`socket.connect(options)`][].
+
+* `value` {boolean} The new default value. The initial default value is `false`.
+
+## `net.getDefaultAutoSelectFamilyAttemptTimeout()`
+
+<!-- YAML
+added:
+ - v19.8.0
+ - v18.18.0
+-->
+
+Gets the current default value of the `autoSelectFamilyAttemptTimeout` option of [`socket.connect(options)`][].
+The initial default value is `250`.
+
+* Returns: {number} The current default value of the `autoSelectFamilyAttemptTimeout` option.
+
+## `net.setDefaultAutoSelectFamilyAttemptTimeout(value)`
+
+<!-- YAML
+added:
+ - v19.8.0
+ - v18.18.0
+-->
+
+Sets the default value of the `autoSelectFamilyAttemptTimeout` option of [`socket.connect(options)`][].
+
+* `value` {number} The new default value, which must be a positive number. If the number is less than `10`,
+  the value `10` is used instead. The initial default value is `250`.
 
 ## `net.isIP(input)`
 
@@ -1479,9 +1774,17 @@ added: v0.3.0
 * `input` {string}
 * Returns: {integer}
 
-Tests if input is an IP address. Returns `0` for invalid strings,
-returns `4` for IP version 4 addresses, and returns `6` for IP version 6
-addresses.
+Returns `6` if `input` is an IPv6 address. Returns `4` if `input` is an IPv4
+address in [dot-decimal notation][] with no leading zeroes. Otherwise, returns
+`0`.
+
+```js
+net.isIP('::1'); // returns 6
+net.isIP('127.0.0.1'); // returns 4
+net.isIP('127.000.000.001'); // returns 0
+net.isIP('127.0.0.1/24'); // returns 0
+net.isIP('fhqwhgads'); // returns 0
+```
 
 ## `net.isIPv4(input)`
 
@@ -1492,7 +1795,15 @@ added: v0.3.0
 * `input` {string}
 * Returns: {boolean}
 
-Returns `true` if input is a version 4 IP address, otherwise returns `false`.
+Returns `true` if `input` is an IPv4 address in [dot-decimal notation][] with no
+leading zeroes. Otherwise, returns `false`.
+
+```js
+net.isIPv4('127.0.0.1'); // returns true
+net.isIPv4('127.000.000.001'); // returns false
+net.isIPv4('127.0.0.1/24'); // returns false
+net.isIPv4('fhqwhgads'); // returns false
+```
 
 ## `net.isIPv6(input)`
 
@@ -1503,10 +1814,16 @@ added: v0.3.0
 * `input` {string}
 * Returns: {boolean}
 
-Returns `true` if input is a version 6 IP address, otherwise returns `false`.
+Returns `true` if `input` is an IPv6 address. Otherwise, returns `false`.
+
+```js
+net.isIPv6('::1'); // returns true
+net.isIPv6('fhqwhgads'); // returns false
+```
 
 [IPC]: #ipc-support
 [Identifying paths for IPC connections]: #identifying-paths-for-ipc-connections
+[RFC 8305]: https://www.rfc-editor.org/rfc/rfc8305.txt
 [Readable Stream]: stream.md#class-streamreadable
 [`'close'`]: #event-close
 [`'connect'`]: #event-connect
@@ -1532,6 +1849,8 @@ Returns `true` if input is a version 6 IP address, otherwise returns `false`.
 [`net.createConnection(path)`]: #netcreateconnectionpath-connectlistener
 [`net.createConnection(port, host)`]: #netcreateconnectionport-host-connectlistener
 [`net.createServer()`]: #netcreateserveroptions-connectionlistener
+[`net.getDefaultAutoSelectFamily()`]: #netgetdefaultautoselectfamily
+[`net.getDefaultAutoSelectFamilyAttemptTimeout()`]: #netgetdefaultautoselectfamilyattempttimeout
 [`new net.Socket(options)`]: #new-netsocketoptions
 [`readable.setEncoding()`]: stream.md#readablesetencodingencoding
 [`server.close()`]: #serverclosecallback
@@ -1551,12 +1870,15 @@ Returns `true` if input is a version 6 IP address, otherwise returns `false`.
 [`socket.pause()`]: #socketpause
 [`socket.resume()`]: #socketresume
 [`socket.setEncoding()`]: #socketsetencodingencoding
+[`socket.setKeepAlive(enable, initialDelay)`]: #socketsetkeepaliveenable-initialdelay
 [`socket.setTimeout()`]: #socketsettimeouttimeout-callback
 [`socket.setTimeout(timeout)`]: #socketsettimeouttimeout-callback
+[`stream.getDefaultHighWaterMark()`]: stream.md#streamgetdefaulthighwatermarkobjectmode
 [`writable.destroy()`]: stream.md#writabledestroyerror
 [`writable.destroyed`]: stream.md#writabledestroyed
 [`writable.end()`]: stream.md#writableendchunk-encoding-callback
 [`writable.writableLength`]: stream.md#writablewritablelength
+[dot-decimal notation]: https://en.wikipedia.org/wiki/Dot-decimal_notation
 [half-closed]: https://tools.ietf.org/html/rfc1122
 [stream_writable_write]: stream.md#writablewritechunk-encoding-callback
 [unspecified IPv4 address]: https://en.wikipedia.org/wiki/0.0.0.0

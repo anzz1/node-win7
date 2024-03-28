@@ -27,7 +27,6 @@
 #include "crypto/crypto_context.h"
 #include "crypto/crypto_clienthello.h"
 
-#include "allocated_buffer.h"
 #include "async_wrap.h"
 #include "stream_wrap.h"
 #include "v8.h"
@@ -35,6 +34,7 @@
 #include <openssl/ssl.h>
 
 #include <string>
+#include <vector>
 
 namespace node {
 namespace crypto {
@@ -47,6 +47,8 @@ class TLSWrap : public AsyncWrap,
     kClient,
     kServer
   };
+
+  enum class UnderlyingStreamWriteStatus { kHasActive, kVacancy };
 
   static void Initialize(v8::Local<v8::Object> target,
                          v8::Local<v8::Value> unused,
@@ -136,7 +138,8 @@ class TLSWrap : public AsyncWrap,
           v8::Local<v8::Object> obj,
           Kind kind,
           StreamBase* stream,
-          SecureContext* sc);
+          SecureContext* sc,
+          UnderlyingStreamWriteStatus under_stream_ws);
 
   static void SSLInfoCallback(const SSL* ssl_, int where, int ret);
   void InitSSL();
@@ -167,13 +170,12 @@ class TLSWrap : public AsyncWrap,
 
   int SetCACerts(SecureContext* sc);
 
-  v8::MaybeLocal<v8::Value> GetSSLError(int status, int* err, std::string* msg);
-
   static int SelectSNIContextCallback(SSL* s, int* ad, void* arg);
 
   static void CertCbDone(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void DestroySSL(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void EnableCertCb(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void EnableALPNCb(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void EnableKeylogCallback(
       const v8::FunctionCallbackInfo<v8::Value>& args);
   static void EnableSessionCallbacks(
@@ -218,6 +220,8 @@ class TLSWrap : public AsyncWrap,
   static void Start(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void VerifyError(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void Wrap(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void WritesIssuedByPrevListenerDone(
+      const v8::FunctionCallbackInfo<v8::Value>& args);
 
 #ifdef SSL_set_max_send_fragment
   static void SetMaxSendFragment(
@@ -254,7 +258,7 @@ class TLSWrap : public AsyncWrap,
   BIO* enc_in_ = nullptr;   // StreamListener fills this for SSL_read().
   BIO* enc_out_ = nullptr;  // SSL_write()/handshake fills this for EncOut().
   // Waiting for ClearIn() to pass to SSL_write().
-  AllocatedBuffer pending_cleartext_input_;
+  std::unique_ptr<v8::BackingStore> pending_cleartext_input_;
   size_t write_size_ = 0;
   BaseObjectPtr<AsyncWrap> current_write_;
   BaseObjectPtr<AsyncWrap> current_empty_write_;
@@ -284,6 +288,12 @@ class TLSWrap : public AsyncWrap,
   void* cert_cb_arg_ = nullptr;
 
   BIOPointer bio_trace_;
+
+  bool has_active_write_issued_by_prev_listener_ = false;
+
+ public:
+  std::vector<unsigned char> alpn_protos_;  // Accessed by SelectALPNCallback.
+  bool alpn_callback_enabled_ = false;      // Accessed by SelectALPNCallback.
 };
 
 }  // namespace crypto

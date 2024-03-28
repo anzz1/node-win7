@@ -34,7 +34,6 @@ class ExperimentalRegExp final : public AllStatic {
                                     Address input_start, Address input_end,
                                     int* output_registers,
                                     int32_t output_register_count,
-                                    Address backtrack_stack,
                                     RegExp::CallOrigin call_origin,
                                     Isolate* isolate, Address regexp);
   static MaybeHandle<Object> Exec(
@@ -42,7 +41,7 @@ class ExperimentalRegExp final : public AllStatic {
       int index, Handle<RegExpMatchInfo> last_match_info,
       RegExp::ExecQuirks exec_quirks = RegExp::ExecQuirks::kNone);
   static int32_t ExecRaw(Isolate* isolate, RegExp::CallOrigin call_origin,
-                         JSRegExp regexp, String subject,
+                         Tagged<JSRegExp> regexp, Tagged<String> subject,
                          int32_t* output_registers,
                          int32_t output_register_count, int32_t subject_index);
 

@@ -7,6 +7,7 @@
 #include "src/base/iterator.h"
 #include "src/base/optional.h"
 #include "src/base/utils/random-number-generator.h"
+#include "src/compiler/backend/instruction-codes.h"
 
 namespace v8 {
 namespace internal {
@@ -82,9 +83,9 @@ InstructionScheduler::InstructionScheduler(Zone* zone,
       last_live_in_reg_marker_(nullptr),
       last_deopt_or_trap_(nullptr),
       operands_map_(zone) {
-  if (FLAG_turbo_stress_instruction_scheduling) {
+  if (v8_flags.turbo_stress_instruction_scheduling) {
     random_number_generator_ =
-        base::Optional<base::RandomNumberGenerator>(FLAG_random_seed);
+        base::Optional<base::RandomNumberGenerator>(v8_flags.random_seed);
   }
 }
 
@@ -99,7 +100,7 @@ void InstructionScheduler::StartBlock(RpoNumber rpo) {
 }
 
 void InstructionScheduler::EndBlock(RpoNumber rpo) {
-  if (FLAG_turbo_stress_instruction_scheduling) {
+  if (v8_flags.turbo_stress_instruction_scheduling) {
     Schedule<StressSchedulerQueue>();
   } else {
     Schedule<CriticalPathFirstQueue>();
@@ -119,7 +120,7 @@ void InstructionScheduler::AddTerminator(Instruction* instr) {
 
 void InstructionScheduler::AddInstruction(Instruction* instr) {
   if (IsBarrier(instr)) {
-    if (FLAG_turbo_stress_instruction_scheduling) {
+    if (v8_flags.turbo_stress_instruction_scheduling) {
       Schedule<StressSchedulerQueue>();
     } else {
       Schedule<CriticalPathFirstQueue>();
@@ -167,12 +168,16 @@ void InstructionScheduler::AddInstruction(Instruction* instr) {
         last_side_effect_instr_->AddSuccessor(new_node);
       }
       pending_loads_.push_back(new_node);
-    } else if (instr->IsDeoptimizeCall() || instr->IsTrap()) {
+    } else if (instr->IsDeoptimizeCall() || CanTrap(instr)) {
       // Ensure that deopts or traps are not reordered with respect to
       // side-effect instructions.
       if (last_side_effect_instr_ != nullptr) {
         last_side_effect_instr_->AddSuccessor(new_node);
       }
+    }
+
+    // Update last deoptimization or trap point.
+    if (instr->IsDeoptimizeCall() || CanTrap(instr)) {
       last_deopt_or_trap_ = new_node;
     }
 
@@ -297,6 +302,12 @@ int InstructionScheduler::GetInstructionFlags(const Instruction* instr) const {
       // effects.
       return kIsLoadOperation;
 
+    case kArchStackPointer:
+    case kArchSetStackPointer:
+      // Instructions that load or set the stack pointer must not be reordered
+      // with instructions with side effects or with each other.
+      return kHasSideEffect;
+
     case kArchPrepareCallCFunction:
     case kArchPrepareTailCall:
     case kArchTailCallCodeObject:
@@ -304,7 +315,7 @@ int InstructionScheduler::GetInstructionFlags(const Instruction* instr) const {
 #if V8_ENABLE_WEBASSEMBLY
     case kArchTailCallWasm:
 #endif  // V8_ENABLE_WEBASSEMBLY
-    case kArchAbortCSAAssert:
+    case kArchAbortCSADcheck:
       return kHasSideEffect;
 
     case kArchDebugBreak:
@@ -329,6 +340,7 @@ int InstructionScheduler::GetInstructionFlags(const Instruction* instr) const {
 
     case kArchStoreWithWriteBarrier:
     case kArchAtomicStoreWithWriteBarrier:
+    case kArchStoreIndirectWithWriteBarrier:
       return kHasSideEffect;
 
     case kAtomicLoadInt8:

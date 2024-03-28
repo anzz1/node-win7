@@ -393,11 +393,11 @@ static GENERAL_NAMES *v2i_subject_alt(X509V3_EXT_METHOD *method,
 
     for (i = 0; i < num; i++) {
         cnf = sk_CONF_VALUE_value(nval, i);
-        if (!ossl_v3_name_cmp(cnf->name, "email")
+        if (ossl_v3_name_cmp(cnf->name, "email") == 0
             && cnf->value && strcmp(cnf->value, "copy") == 0) {
             if (!copy_email(ctx, gens, 0))
                 goto err;
-        } else if (!ossl_v3_name_cmp(cnf->name, "email")
+        } else if (ossl_v3_name_cmp(cnf->name, "email") == 0
                    && cnf->value && strcmp(cnf->value, "move") == 0) {
             if (!copy_email(ctx, gens, 1))
                 goto err;
@@ -434,10 +434,9 @@ static int copy_email(X509V3_CTX *ctx, GENERAL_NAMES *gens, int move_p)
         return 0;
     }
     /* Find the subject name */
-    if (ctx->subject_cert)
-        nm = X509_get_subject_name(ctx->subject_cert);
-    else
-        nm = X509_REQ_get_subject_name(ctx->subject_req);
+    nm = ctx->subject_cert != NULL ?
+        X509_get_subject_name(ctx->subject_cert) :
+        X509_REQ_get_subject_name(ctx->subject_req);
 
     /* Now add any email address(es) to STACK */
     while ((i = X509_NAME_get_index_by_NID(nm,
@@ -582,6 +581,8 @@ GENERAL_NAME *a2i_GENERAL_NAME(GENERAL_NAME *out,
         if ((gen->d.ia5 = ASN1_IA5STRING_new()) == NULL ||
             !ASN1_STRING_set(gen->d.ia5, (unsigned char *)value,
                              strlen(value))) {
+            ASN1_IA5STRING_free(gen->d.ia5);
+            gen->d.ia5 = NULL;
             ERR_raise(ERR_LIB_X509V3, ERR_R_MALLOC_FAILURE);
             goto err;
         }
@@ -652,16 +653,21 @@ static int do_othername(GENERAL_NAME *gen, const char *value, X509V3_CTX *ctx)
      */
     ASN1_TYPE_free(gen->d.otherName->value);
     if ((gen->d.otherName->value = ASN1_generate_v3(p + 1, ctx)) == NULL)
-        return 0;
+        goto err;
     objlen = p - value;
     objtmp = OPENSSL_strndup(value, objlen);
     if (objtmp == NULL)
-        return 0;
+        goto err;
     gen->d.otherName->type_id = OBJ_txt2obj(objtmp, 0);
     OPENSSL_free(objtmp);
     if (!gen->d.otherName->type_id)
-        return 0;
+        goto err;
     return 1;
+
+ err:
+    OTHERNAME_free(gen->d.otherName);
+    gen->d.otherName = NULL;
+    return 0;
 }
 
 static int do_dirname(GENERAL_NAME *gen, const char *value, X509V3_CTX *ctx)

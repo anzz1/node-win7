@@ -9,13 +9,11 @@
 #include <memory>
 
 #include "src/base/bits.h"
-#include "src/base/small-vector.h"
 #include "src/codegen/macro-assembler.h"
 #include "src/wasm/baseline/liftoff-assembler-defs.h"
 #include "src/wasm/baseline/liftoff-compiler.h"
 #include "src/wasm/baseline/liftoff-register.h"
 #include "src/wasm/function-body-decoder.h"
-#include "src/wasm/wasm-code-manager.h"
 #include "src/wasm/wasm-module.h"
 #include "src/wasm/wasm-opcodes.h"
 #include "src/wasm/wasm-value.h"
@@ -30,54 +28,83 @@ class CallDescriptor;
 
 namespace wasm {
 
-enum LiftoffCondition {
-  kEqual,
-  kUnequal,
-  kSignedLessThan,
-  kSignedLessEqual,
-  kSignedGreaterThan,
-  kSignedGreaterEqual,
-  kUnsignedLessThan,
-  kUnsignedLessEqual,
-  kUnsignedGreaterThan,
-  kUnsignedGreaterEqual
-};
-
-inline constexpr LiftoffCondition Negate(LiftoffCondition liftoff_cond) {
-  switch (liftoff_cond) {
+inline constexpr Condition Negate(Condition cond) {
+  switch (cond) {
     case kEqual:
-      return kUnequal;
-    case kUnequal:
+      return kNotEqual;
+    case kNotEqual:
       return kEqual;
-    case kSignedLessThan:
-      return kSignedGreaterEqual;
-    case kSignedLessEqual:
-      return kSignedGreaterThan;
-    case kSignedGreaterEqual:
-      return kSignedLessThan;
-    case kSignedGreaterThan:
-      return kSignedLessEqual;
+    case kLessThan:
+      return kGreaterThanEqual;
+    case kLessThanEqual:
+      return kGreaterThan;
+    case kGreaterThanEqual:
+      return kLessThan;
+    case kGreaterThan:
+      return kLessThanEqual;
     case kUnsignedLessThan:
-      return kUnsignedGreaterEqual;
-    case kUnsignedLessEqual:
+      return kUnsignedGreaterThanEqual;
+    case kUnsignedLessThanEqual:
       return kUnsignedGreaterThan;
-    case kUnsignedGreaterEqual:
+    case kUnsignedGreaterThanEqual:
       return kUnsignedLessThan;
     case kUnsignedGreaterThan:
-      return kUnsignedLessEqual;
+      return kUnsignedLessThanEqual;
+    default:
+      UNREACHABLE();
   }
 }
 
-class LiftoffAssembler : public TurboAssembler {
+inline constexpr Condition Flip(Condition cond) {
+  switch (cond) {
+    case kEqual:
+      return kEqual;
+    case kNotEqual:
+      return kNotEqual;
+    case kLessThan:
+      return kGreaterThan;
+    case kLessThanEqual:
+      return kGreaterThanEqual;
+    case kGreaterThanEqual:
+      return kLessThanEqual;
+    case kGreaterThan:
+      return kLessThan;
+    case kUnsignedLessThan:
+      return kUnsignedGreaterThan;
+    case kUnsignedLessThanEqual:
+      return kUnsignedGreaterThanEqual;
+    case kUnsignedGreaterThanEqual:
+      return kUnsignedLessThanEqual;
+    case kUnsignedGreaterThan:
+      return kUnsignedLessThan;
+    default:
+      UNREACHABLE();
+  }
+}
+
+class LiftoffAssembler;
+class FreezeCacheState {
+ public:
+#if DEBUG
+  explicit FreezeCacheState(LiftoffAssembler& assm);
+  ~FreezeCacheState();
+
+ private:
+  LiftoffAssembler& assm_;
+#else
+  explicit FreezeCacheState(LiftoffAssembler& assm) {}
+#endif
+};
+
+class LiftoffAssembler : public MacroAssembler {
  public:
   // Each slot in our stack frame currently has exactly 8 bytes.
   static constexpr int kStackSlotSize = 8;
 
-  static constexpr ValueKind kPointerKind =
+  static constexpr ValueKind kIntPtrKind =
       kSystemPointerSize == kInt32Size ? kI32 : kI64;
-  static constexpr ValueKind kTaggedKind =
-      kTaggedSize == kInt32Size ? kI32 : kI64;
-  static constexpr ValueKind kSmiKind = kTaggedKind;
+  // A tagged value known to be a Smi can be treated like a ptr-sized int.
+  static constexpr ValueKind kSmiKind = kTaggedSize == kInt32Size ? kI32 : kI64;
 
   using ValueKindSig = Signature<ValueKind>;
 
@@ -85,18 +112,22 @@ class LiftoffAssembler : public TurboAssembler {
    public:
     enum Location : uint8_t { kStack, kRegister, kIntConst };
 
-    explicit VarState(ValueKind kind, int offset)
-        : loc_(kStack), kind_(kind), spill_offset_(offset) {}
-    explicit VarState(ValueKind kind, LiftoffRegister r, int offset)
+    VarState(ValueKind kind, int offset)
+        : loc_(kStack), kind_(kind), spill_offset_(offset) {
+      DCHECK_LE(0, offset);
+    }
+    VarState(ValueKind kind, LiftoffRegister r, int offset)
         : loc_(kRegister), kind_(kind), reg_(r), spill_offset_(offset) {
       DCHECK_EQ(r.reg_class(), reg_class_for(kind));
+      DCHECK_LE(0, offset);
     }
-    explicit VarState(ValueKind kind, int32_t i32_const, int offset)
+    VarState(ValueKind kind, int32_t i32_const, int offset)
         : loc_(kIntConst),
           kind_(kind),
           i32_const_(i32_const),
           spill_offset_(offset) {
       DCHECK(kind_ == kI32 || kind_ == kI64);
+      DCHECK_LE(0, offset);
     }
 
     bool is_stack() const { return loc_ == kStack; }
@@ -120,7 +151,14 @@ class LiftoffAssembler : public TurboAssembler {
                            : WasmValue(int64_t{i32_const_});
     }
 
-    int offset() const { return spill_offset_; }
+    int offset() const {
+      V8_ASSUME(spill_offset_ >= 0);
+      return spill_offset_;
+    }
+    void set_offset(int offset) {
+      DCHECK_LE(0, spill_offset_);
+      spill_offset_ = offset;
+    }
 
     Register gp_reg() const { return reg().gp(); }
     DoubleRegister fp_reg() const { return reg().fp(); }
@@ -171,8 +209,9 @@ class LiftoffAssembler : public TurboAssembler {
   ASSERT_TRIVIALLY_COPYABLE(VarState);
 
   struct CacheState {
-    // Allow default construction, move construction, and move assignment.
-    CacheState() = default;
+    explicit CacheState(Zone* zone) : stack_state(zone) {}
+
+    // Allow move construction and move assignment.
     CacheState(CacheState&&) V8_NOEXCEPT = default;
     CacheState& operator=(CacheState&&) V8_NOEXCEPT = default;
     // Disallow copy construction.
@@ -191,16 +230,26 @@ class LiftoffAssembler : public TurboAssembler {
                                   /*out*/ LiftoffRegList* spills,
                                   SpillLocation spill_location);
 
-    void DefineSafepoint(Safepoint& safepoint);
+    void DefineSafepoint(SafepointTableBuilder::Safepoint& safepoint);
 
-    void DefineSafepointWithCalleeSavedRegisters(Safepoint& safepoint);
+    void DefineSafepointWithCalleeSavedRegisters(
+        SafepointTableBuilder::Safepoint& safepoint);
 
-    base::SmallVector<VarState, 8> stack_state;
+    // TODO(jkummerow): Wrap all accesses to {stack_state} in accessors that
+    // check {frozen}.
+    SmallZoneVector<VarState, 16> stack_state;
     LiftoffRegList used_registers;
     uint32_t register_use_count[kAfterMaxLiftoffRegCode] = {0};
     LiftoffRegList last_spilled_regs;
     Register cached_instance = no_reg;
+    static constexpr int kNoCachedMemIndex = -1;
+    // The index of the cached memory start, or {kNoCachedMemIndex} if none is
+    // cached ({cached_mem_start} will be {no_reg} in that case).
+    int cached_mem_index = kNoCachedMemIndex;
     Register cached_mem_start = no_reg;
+#if DEBUG
+    uint32_t frozen = 0;
+#endif
 
     bool has_unused_register(RegClass rc, LiftoffRegList pinned = {}) const {
       if (kNeedI64RegPair && rc == kGpRegPair) {
@@ -212,7 +261,6 @@ class LiftoffAssembler : public TurboAssembler {
             kFpCacheRegList.MaskOut(used_registers).MaskOut(pinned);
         return available_regs.HasAdjacentFpRegsSet();
       }
-      DCHECK(rc == kGpReg || rc == kFpReg);
       LiftoffRegList candidates = GetCacheRegList(rc);
       return has_unused_register(candidates.MaskOut(pinned));
     }
@@ -236,7 +284,6 @@ class LiftoffAssembler : public TurboAssembler {
         DCHECK(is_free(LiftoffRegister::ForFpPair(low)));
         return LiftoffRegister::ForFpPair(low);
       }
-      DCHECK(rc == kGpReg || rc == kFpReg);
       LiftoffRegList candidates = GetCacheRegList(rc);
       return unused_register(candidates, pinned);
     }
@@ -257,6 +304,7 @@ class LiftoffAssembler : public TurboAssembler {
     }
 
     LiftoffRegister take_volatile_register(LiftoffRegList candidates) {
+      DCHECK(!frozen);
       DCHECK(has_volatile_register(candidates));
       Register reg = no_reg;
       if (cached_instance != no_reg && candidates.has(cached_instance)) {
@@ -266,6 +314,7 @@ class LiftoffAssembler : public TurboAssembler {
         DCHECK(candidates.has(cached_mem_start));
         reg = cached_mem_start;
         cached_mem_start = no_reg;
+        cached_mem_index = kNoCachedMemIndex;
       }
 
       LiftoffRegister ret{reg};
@@ -276,6 +325,7 @@ class LiftoffAssembler : public TurboAssembler {
     }
 
     void SetCacheRegister(Register* cache, Register reg) {
+      DCHECK(!frozen);
       DCHECK_EQ(no_reg, *cache);
       *cache = reg;
       int liftoff_code = LiftoffRegister{reg}.liftoff_code();
@@ -288,8 +338,10 @@ class LiftoffAssembler : public TurboAssembler {
       SetCacheRegister(&cached_instance, reg);
     }
 
-    void SetMemStartCacheRegister(Register reg) {
+    void SetMemStartCacheRegister(Register reg, int memory_index) {
       SetCacheRegister(&cached_mem_start, reg);
+      DCHECK_EQ(kNoCachedMemIndex, cached_mem_index);
+      cached_mem_index = memory_index;
     }
 
     Register TrySetCachedInstanceRegister(LiftoffRegList pinned) {
@@ -307,8 +359,9 @@ class LiftoffAssembler : public TurboAssembler {
       return new_cache_reg;
     }
 
-    void ClearCacheRegister(Register* cache) {
-      DCHECK(cache == &cached_instance || cache == &cached_mem_start);
+    V8_INLINE void ClearCacheRegister(Register* cache) {
+      DCHECK(!frozen);
+      V8_ASSUME(cache == &cached_instance || cache == &cached_mem_start);
       if (*cache == no_reg) return;
       int liftoff_code = LiftoffRegister{*cache}.liftoff_code();
       DCHECK_EQ(1, register_use_count[liftoff_code]);
@@ -320,15 +373,20 @@ class LiftoffAssembler : public TurboAssembler {
     void ClearCachedInstanceRegister() { ClearCacheRegister(&cached_instance); }
 
     void ClearCachedMemStartRegister() {
+      V8_ASSUME(cached_mem_index == kNoCachedMemIndex || cached_mem_index >= 0);
+      if (cached_mem_index == kNoCachedMemIndex) return;
+      cached_mem_index = kNoCachedMemIndex;
+      DCHECK_NE(no_reg, cached_mem_start);
       ClearCacheRegister(&cached_mem_start);
     }
 
     void ClearAllCacheRegisters() {
-      ClearCacheRegister(&cached_instance);
-      ClearCacheRegister(&cached_mem_start);
+      ClearCachedInstanceRegister();
+      ClearCachedMemStartRegister();
     }
 
     void inc_used(LiftoffRegister reg) {
+      DCHECK(!frozen);
       if (reg.is_pair()) {
         inc_used(reg.low());
         inc_used(reg.high());
@@ -341,6 +399,7 @@ class LiftoffAssembler : public TurboAssembler {
 
     // Returns whether this was the last use.
     void dec_used(LiftoffRegister reg) {
+      DCHECK(!frozen);
       DCHECK(is_used(reg));
       if (reg.is_pair()) {
         dec_used(reg.low());
@@ -370,6 +429,7 @@ class LiftoffAssembler : public TurboAssembler {
     }
 
     void clear_used(LiftoffRegister reg) {
+      DCHECK(!frozen);
       if (reg.is_pair()) {
         clear_used(reg.low());
         clear_used(reg.high());
@@ -382,11 +442,13 @@ class LiftoffAssembler : public TurboAssembler {
     bool is_free(LiftoffRegister reg) const { return !is_used(reg); }
 
     void reset_used_registers() {
+      DCHECK(!frozen);
       used_registers = {};
       memset(register_use_count, 0, sizeof(register_use_count));
     }
 
     LiftoffRegister GetNextSpillReg(LiftoffRegList candidates) {
+      DCHECK(!frozen);
       DCHECK(!candidates.is_empty());
       // This method should only be called if none of the candidates is free.
       DCHECK(candidates.MaskOut(used_registers).is_empty());
@@ -399,11 +461,7 @@ class LiftoffAssembler : public TurboAssembler {
       return reg;
     }
 
-    // TODO(clemensb): Don't copy the full parent state (this makes us N^2).
-    void InitMerge(const CacheState& source, uint32_t num_locals,
-                   uint32_t arity, uint32_t stack_depth);
-
-    void Steal(const CacheState& source);
+    void Steal(CacheState& source);
 
     void Split(const CacheState& source);
 
@@ -416,20 +474,59 @@ class LiftoffAssembler : public TurboAssembler {
     CacheState& operator=(const CacheState&) V8_NOEXCEPT = default;
   };
 
-  explicit LiftoffAssembler(std::unique_ptr<AssemblerBuffer>);
+  explicit LiftoffAssembler(Zone*, std::unique_ptr<AssemblerBuffer>);
   ~LiftoffAssembler() override;
 
-  LiftoffRegister LoadToRegister(VarState slot, LiftoffRegList pinned);
+  Zone* zone() const { return cache_state_.stack_state.get_allocator().zone(); }
 
-  LiftoffRegister PopToRegister(LiftoffRegList pinned = {}) {
+  // Load a cache slot to a free register.
+  V8_INLINE LiftoffRegister LoadToRegister(VarState slot,
+                                           LiftoffRegList pinned) {
+    if (V8_LIKELY(slot.is_reg())) return slot.reg();
+    return LoadToRegister_Slow(slot, pinned);
+  }
+
+  // Slow path called for the method above.
+  V8_NOINLINE V8_PRESERVE_MOST LiftoffRegister
+  LoadToRegister_Slow(VarState slot, LiftoffRegList pinned);
+
+  // Load a non-register cache slot to a given (fixed) register.
+  void LoadToFixedRegister(VarState slot, LiftoffRegister reg) {
+    DCHECK(slot.is_const() || slot.is_stack());
+    if (slot.is_const()) {
+      LoadConstant(reg, slot.constant());
+    } else {
+      Fill(reg, slot.offset(), slot.kind());
+    }
+  }
+
+  // Pop a VarState from the stack, updating the register use count accordingly.
+  V8_INLINE VarState PopVarState() {
     DCHECK(!cache_state_.stack_state.empty());
     VarState slot = cache_state_.stack_state.back();
     cache_state_.stack_state.pop_back();
-    if (slot.is_reg()) {
-      cache_state_.dec_used(slot.reg());
-      return slot.reg();
-    }
+    if (V8_LIKELY(slot.is_reg())) cache_state_.dec_used(slot.reg());
+    return slot;
+  }
+
+  V8_INLINE LiftoffRegister PopToRegister(LiftoffRegList pinned = {}) {
+    VarState slot = PopVarState();
     return LoadToRegister(slot, pinned);
+  }
+
+  void PopToFixedRegister(LiftoffRegister reg) {
+    DCHECK(!cache_state_.stack_state.empty());
+    VarState slot = cache_state_.stack_state.back();
+    cache_state_.stack_state.pop_back();
+    if (V8_LIKELY(slot.is_reg())) {
+      cache_state_.dec_used(slot.reg());
+      if (slot.reg() == reg) return;
+      if (cache_state_.is_used(reg)) SpillRegister(reg);
+      Move(reg, slot.reg(), slot.kind());
+      return;
+    }
+    if (cache_state_.is_used(reg)) SpillRegister(reg);
+    LoadToFixedRegister(slot, reg);
   }
 
   // Use this to pop a value into a register that has no other uses, so it
@@ -437,11 +534,12 @@ class LiftoffAssembler : public TurboAssembler {
   LiftoffRegister PopToModifiableRegister(LiftoffRegList pinned = {}) {
     ValueKind kind = cache_state_.stack_state.back().kind();
     LiftoffRegister reg = PopToRegister(pinned);
-    if (cache_state()->is_free(reg)) return reg;
+    if (cache_state()->is_free(reg) && !pinned.has(reg)) return reg;
 
-    pinned.set(reg);
     LiftoffRegister new_reg = GetUnusedRegister(reg.reg_class(), pinned);
-    Move(new_reg, reg, kind);
+    // {new_reg} could be equal to {reg}, but it's unused by the stack now.
+    // Also, {reg} still holds the previous value, even if it was spilled.
+    if (new_reg != reg) Move(new_reg, reg, kind);
     return new_reg;
   }
 
@@ -456,20 +554,26 @@ class LiftoffAssembler : public TurboAssembler {
 
   void DropValues(int count);
 
-  // Careful: this indexes "from the other end", i.e. depth=0 is the value
-  // at the bottom of the stack!
-  void DropValue(int depth);
+  // Drop a specific value from the stack; this is an expensive operation which
+  // is currently only used for exceptions.
+  // Careful: this indexes "from the other end", i.e. offset=0 is the value at
+  // the bottom of the stack.
+  void DropExceptionValueAtOffset(int offset);
 
   // Ensure that the loop inputs are either in a register or spilled to the
   // stack, so that we can merge different values on the back-edge.
   void PrepareLoopArgs(int num);
 
-  int NextSpillOffset(ValueKind kind) {
-    int offset = TopSpillOffset() + SlotSizeForType(kind);
+  V8_INLINE static int NextSpillOffset(ValueKind kind, int top_spill_offset) {
+    int offset = top_spill_offset + SlotSizeForType(kind);
     if (NeedsAlignment(kind)) {
       offset = RoundUp(offset, SlotSizeForType(kind));
     }
     return offset;
+  }
+
+  int NextSpillOffset(ValueKind kind) {
+    return NextSpillOffset(kind, TopSpillOffset());
   }
 
   int TopSpillOffset() const {
@@ -495,7 +599,7 @@ class LiftoffAssembler : public TurboAssembler {
   }
 
   void PushConstant(ValueKind kind, int32_t i32_const) {
-    DCHECK(kind == kI32 || kind == kI64);
+    V8_ASSUME(kind == kI32 || kind == kI64);
     cache_state_.stack_state.emplace_back(kind, i32_const,
                                           NextSpillOffset(kind));
   }
@@ -504,7 +608,7 @@ class LiftoffAssembler : public TurboAssembler {
     cache_state_.stack_state.emplace_back(kind, NextSpillOffset(kind));
   }
 
-  void SpillRegister(LiftoffRegister);
+  V8_NOINLINE V8_PRESERVE_MOST void SpillRegister(LiftoffRegister);
 
   uint32_t GetNumUses(LiftoffRegister reg) const {
     return cache_state_.get_use_count(reg);
@@ -515,6 +619,7 @@ class LiftoffAssembler : public TurboAssembler {
   LiftoffRegister GetUnusedRegister(
       RegClass rc, std::initializer_list<LiftoffRegister> try_first,
       LiftoffRegList pinned) {
+    DCHECK(!cache_state_.frozen);
     for (LiftoffRegister reg : try_first) {
       DCHECK_EQ(reg.reg_class(), rc);
       if (cache_state_.is_free(reg)) return reg;
@@ -522,8 +627,10 @@ class LiftoffAssembler : public TurboAssembler {
     return GetUnusedRegister(rc, pinned);
   }
 
-  // Get an unused register for class {rc}, potentially spilling to free one.
+  // Get an unused register for class {rc}, excluding registers from {pinned},
+  // potentially spilling to free one.
   LiftoffRegister GetUnusedRegister(RegClass rc, LiftoffRegList pinned) {
+    DCHECK(!cache_state_.frozen);
     if (kNeedI64RegPair && rc == kGpRegPair) {
       LiftoffRegList candidates = kGpCacheRegList.MaskOut(pinned);
       Register low = candidates.clear(GetUnusedRegister(candidates)).gp();
@@ -538,32 +645,40 @@ class LiftoffAssembler : public TurboAssembler {
       DoubleRegister low_fp = SpillAdjacentFpRegisters(pinned).fp();
       return LiftoffRegister::ForFpPair(low_fp);
     }
-    DCHECK(rc == kGpReg || rc == kFpReg);
     LiftoffRegList candidates = GetCacheRegList(rc).MaskOut(pinned);
     return GetUnusedRegister(candidates);
   }
 
   // Get an unused register of {candidates}, potentially spilling to free one.
   LiftoffRegister GetUnusedRegister(LiftoffRegList candidates) {
+    DCHECK(!cache_state_.frozen);
     DCHECK(!candidates.is_empty());
-    if (cache_state_.has_unused_register(candidates)) {
+    if (V8_LIKELY(cache_state_.has_unused_register(candidates))) {
       return cache_state_.unused_register(candidates);
-    }
-    if (cache_state_.has_volatile_register(candidates)) {
-      return cache_state_.take_volatile_register(candidates);
     }
     return SpillOneRegister(candidates);
   }
 
-  void MaterializeMergedConstants(uint32_t arity);
+  // Performs operations on locals and the top {arity} value stack entries
+  // that would (very likely) have to be done by branches. Doing this up front
+  // avoids making each subsequent (conditional) branch repeat this work.
+  void PrepareForBranch(uint32_t arity, LiftoffRegList pinned);
 
+  // These methods handle control-flow merges. {MergeIntoNewState} is used to
+  // generate a new {CacheState} for a merge point, and also emits code to
+  // transfer values from the current state to the new merge state.
+  // {MergeFullStackWith} and {MergeStackWith} then later generate the code for
+  // more merges into an existing state.
+  V8_NODISCARD CacheState MergeIntoNewState(uint32_t num_locals, uint32_t arity,
+                                            uint32_t stack_depth);
+  void MergeFullStackWith(CacheState& target);
   enum JumpDirection { kForwardJump, kBackwardJump };
-  void MergeFullStackWith(CacheState& target, const CacheState& source);
   void MergeStackWith(CacheState& target, uint32_t arity, JumpDirection);
 
   void Spill(VarState* slot);
   void SpillLocals();
   void SpillAllRegisters();
+  inline void LoadSpillAddress(Register dst, int offset, ValueKind kind);
 
   // Clear any uses of {reg} in both the cache and in {possible_uses}.
   // Any use in the stack is spilled. If any register in {possible_uses} matches
@@ -581,6 +696,7 @@ class LiftoffAssembler : public TurboAssembler {
       if (r.is_gp() && cache_state_.cached_instance == r.gp()) {
         cache_state_.ClearCachedInstanceRegister();
       } else if (r.is_gp() && cache_state_.cached_mem_start == r.gp()) {
+        V8_ASSUME(cache_state_.cached_mem_index >= 0);
         cache_state_.ClearCachedMemStartRegister();
       } else {
         SpillRegister(r);
@@ -608,7 +724,7 @@ class LiftoffAssembler : public TurboAssembler {
   // register, or {no_reg} if target was spilled to the stack.
   void PrepareCall(const ValueKindSig*, compiler::CallDescriptor*,
                    Register* target = nullptr,
-                   Register* target_instance = nullptr);
+                   Register target_instance = no_reg);
   // Process return values of the call.
   void FinishCall(const ValueKindSig*, compiler::CallDescriptor*);
 
@@ -634,9 +750,19 @@ class LiftoffAssembler : public TurboAssembler {
     ParallelRegisterMove(base::VectorOf(moves));
   }
 
-  void MoveToReturnLocations(const FunctionSig*,
-                             compiler::CallDescriptor* descriptor);
-
+  // Move the top stack values into the expected return locations specified by
+  // the given call descriptor.
+  void MoveToReturnLocations(const FunctionSig*, compiler::CallDescriptor*);
+  // Slow path for multi-return, called from {MoveToReturnLocations}.
+  V8_NOINLINE V8_PRESERVE_MOST void MoveToReturnLocationsMultiReturn(
+      const FunctionSig*, compiler::CallDescriptor*);
+#if DEBUG
+  void SetCacheStateFrozen() { cache_state_.frozen++; }
+  void UnfreezeCacheState() {
+    DCHECK_GT(cache_state_.frozen, 0);
+    cache_state_.frozen--;
+  }
+#endif
 #ifdef ENABLE_SLOW_DCHECKS
   // Validate that the register use counts reflect the state of the cache.
   bool ValidateCacheState() const;
@@ -651,29 +777,36 @@ class LiftoffAssembler : public TurboAssembler {
   // which can later be patched (via {PatchPrepareStackFrame)} when the size of
   // the frame is known.
   inline int PrepareStackFrame();
+  inline void CallFrameSetupStub(int declared_function_index);
   inline void PrepareTailCall(int num_callee_stack_params,
                               int stack_param_delta);
   inline void AlignFrameSize();
-  inline void PatchPrepareStackFrame(int offset, SafepointTableBuilder*);
+  inline void PatchPrepareStackFrame(int offset, SafepointTableBuilder*,
+                                     bool feedback_vector_slot);
   inline void FinishCode();
   inline void AbortCompilation();
   inline static constexpr int StaticStackFrameSize();
   inline static int SlotSizeForType(ValueKind kind);
   inline static bool NeedsAlignment(ValueKind kind);
 
-  inline void LoadConstant(LiftoffRegister, WasmValue,
-                           RelocInfo::Mode rmode = RelocInfo::NONE);
+  inline void CheckTierUp(int declared_func_index, int budget_used,
+                          Label* ool_label, const FreezeCacheState& frozen);
+  inline void LoadConstant(LiftoffRegister, WasmValue);
   inline void LoadInstanceFromFrame(Register dst);
   inline void LoadFromInstance(Register dst, Register instance, int offset,
                                int size);
   inline void LoadTaggedPointerFromInstance(Register dst, Register instance,
                                             int offset);
+  inline void LoadExternalPointer(Register dst, Register src_addr, int offset,
+                                  ExternalPointerTag tag, Register scratch);
+  inline void LoadExternalPointer(Register dst, Register src_addr, int offset,
+                                  Register index, ExternalPointerTag tag,
+                                  Register scratch);
   inline void SpillInstance(Register instance);
   inline void ResetOSRTarget();
-  inline void FillInstanceInto(Register dst);
   inline void LoadTaggedPointer(Register dst, Register src_addr,
                                 Register offset_reg, int32_t offset_imm,
-                                LiftoffRegList pinned);
+                                bool offset_reg_needs_shift = false);
   inline void LoadFullPointer(Register dst, Register src_addr,
                               int32_t offset_imm);
   enum SkipWriteBarrier : bool {
@@ -681,73 +814,82 @@ class LiftoffAssembler : public TurboAssembler {
     kNoSkipWriteBarrier = false
   };
   inline void StoreTaggedPointer(Register dst_addr, Register offset_reg,
-                                 int32_t offset_imm, LiftoffRegister src,
+                                 int32_t offset_imm, Register src,
                                  LiftoffRegList pinned,
                                  SkipWriteBarrier = kNoSkipWriteBarrier);
   void LoadFixedArrayLengthAsInt32(LiftoffRegister dst, Register array,
                                    LiftoffRegList pinned) {
     int offset = FixedArray::kLengthOffset - kHeapObjectTag;
-    LoadSmiAsInt32(dst, array, offset, pinned);
+    LoadSmiAsInt32(dst, array, offset);
   }
-  void LoadSmiAsInt32(LiftoffRegister dst, Register src_addr, int32_t offset,
-                      LiftoffRegList pinned) {
+  void LoadSmiAsInt32(LiftoffRegister dst, Register src_addr, int32_t offset) {
     if (SmiValuesAre32Bits()) {
 #if V8_TARGET_LITTLE_ENDIAN
       DCHECK_EQ(kSmiShiftSize + kSmiTagSize, 4 * kBitsPerByte);
       offset += 4;
 #endif
-      Load(dst, src_addr, no_reg, offset, LoadType::kI32Load, pinned);
+      Load(dst, src_addr, no_reg, offset, LoadType::kI32Load);
     } else {
       DCHECK(SmiValuesAre31Bits());
-      Load(dst, src_addr, no_reg, offset, LoadType::kI32Load, pinned);
+      Load(dst, src_addr, no_reg, offset, LoadType::kI32Load);
       emit_i32_sari(dst.gp(), dst.gp(), kSmiTagSize);
     }
   }
+  // Warning: may clobber {dst} on some architectures!
+  inline void IncrementSmi(LiftoffRegister dst, int offset);
   inline void Load(LiftoffRegister dst, Register src_addr, Register offset_reg,
-                   uintptr_t offset_imm, LoadType type, LiftoffRegList pinned,
+                   uintptr_t offset_imm, LoadType type,
                    uint32_t* protected_load_pc = nullptr,
-                   bool is_load_mem = false, bool i64_offset = false);
+                   bool is_load_mem = false, bool i64_offset = false,
+                   bool needs_shift = false);
   inline void Store(Register dst_addr, Register offset_reg,
                     uintptr_t offset_imm, LiftoffRegister src, StoreType type,
                     LiftoffRegList pinned,
                     uint32_t* protected_store_pc = nullptr,
-                    bool is_store_mem = false);
+                    bool is_store_mem = false, bool i64_offset = false);
   inline void AtomicLoad(LiftoffRegister dst, Register src_addr,
                          Register offset_reg, uintptr_t offset_imm,
-                         LoadType type, LiftoffRegList pinned);
+                         LoadType type, LiftoffRegList pinned, bool i64_offset);
   inline void AtomicStore(Register dst_addr, Register offset_reg,
                           uintptr_t offset_imm, LiftoffRegister src,
-                          StoreType type, LiftoffRegList pinned);
+                          StoreType type, LiftoffRegList pinned,
+                          bool i64_offset);
 
   inline void AtomicAdd(Register dst_addr, Register offset_reg,
                         uintptr_t offset_imm, LiftoffRegister value,
-                        LiftoffRegister result, StoreType type);
+                        LiftoffRegister result, StoreType type,
+                        bool i64_offset);
 
   inline void AtomicSub(Register dst_addr, Register offset_reg,
                         uintptr_t offset_imm, LiftoffRegister value,
-                        LiftoffRegister result, StoreType type);
+                        LiftoffRegister result, StoreType type,
+                        bool i64_offset);
 
   inline void AtomicAnd(Register dst_addr, Register offset_reg,
                         uintptr_t offset_imm, LiftoffRegister value,
-                        LiftoffRegister result, StoreType type);
+                        LiftoffRegister result, StoreType type,
+                        bool i64_offset);
 
   inline void AtomicOr(Register dst_addr, Register offset_reg,
                        uintptr_t offset_imm, LiftoffRegister value,
-                       LiftoffRegister result, StoreType type);
+                       LiftoffRegister result, StoreType type, bool i64_offset);
 
   inline void AtomicXor(Register dst_addr, Register offset_reg,
                         uintptr_t offset_imm, LiftoffRegister value,
-                        LiftoffRegister result, StoreType type);
+                        LiftoffRegister result, StoreType type,
+                        bool i64_offset);
 
   inline void AtomicExchange(Register dst_addr, Register offset_reg,
                              uintptr_t offset_imm, LiftoffRegister value,
-                             LiftoffRegister result, StoreType type);
+                             LiftoffRegister result, StoreType type,
+                             bool i64_offset);
 
   inline void AtomicCompareExchange(Register dst_addr, Register offset_reg,
                                     uintptr_t offset_imm,
                                     LiftoffRegister expected,
                                     LiftoffRegister new_value,
-                                    LiftoffRegister value, StoreType type);
+                                    LiftoffRegister value, StoreType type,
+                                    bool i64_offset);
 
   inline void AtomicFence();
 
@@ -769,6 +911,8 @@ class LiftoffAssembler : public TurboAssembler {
   // 4 bytes on the stack holding half of a 64-bit value.
   inline void FillI64Half(Register, int offset, RegPairHalf);
   inline void FillStackSlotsWithZero(int start, int size);
+
+  inline void emit_trace_instruction(uint32_t markid);
 
   // i32 binops.
   inline void emit_i32_add(Register dst, Register lhs, Register rhs);
@@ -851,7 +995,7 @@ class LiftoffAssembler : public TurboAssembler {
   inline void emit_i64_ctz(LiftoffRegister dst, LiftoffRegister src);
   inline bool emit_i64_popcnt(LiftoffRegister dst, LiftoffRegister src);
 
-  inline void emit_u32_to_intptr(Register dst, Register src);
+  inline void emit_u32_to_uintptr(Register dst, Register src);
 
   void emit_ptrsize_add(Register dst, Register lhs, Register rhs) {
     if (kSystemPointerSize == 8) {
@@ -893,21 +1037,12 @@ class LiftoffAssembler : public TurboAssembler {
     }
   }
 
-  void emit_ptrsize_set_cond(LiftoffCondition condition, Register dst,
+  void emit_ptrsize_set_cond(Condition condition, Register dst,
                              LiftoffRegister lhs, LiftoffRegister rhs) {
     if (kSystemPointerSize == 8) {
       emit_i64_set_cond(condition, dst, lhs, rhs);
     } else {
       emit_i32_set_cond(condition, dst, lhs.gp(), rhs.gp());
-    }
-  }
-
-  void emit_ptrsize_zeroextend_i32(Register dst, Register src) {
-    if (kSystemPointerSize == 8) {
-      emit_type_conversion(kExprI64UConvertI32, LiftoffRegister(dst),
-                           LiftoffRegister(src));
-    } else if (dst != src) {
-      Move(dst, src, kI32);
     }
   }
 
@@ -973,20 +1108,20 @@ class LiftoffAssembler : public TurboAssembler {
   inline void emit_jump(Label*);
   inline void emit_jump(Register);
 
-  inline void emit_cond_jump(LiftoffCondition, Label*, ValueKind value,
-                             Register lhs, Register rhs = no_reg);
-  inline void emit_i32_cond_jumpi(LiftoffCondition liftoff_cond, Label* label,
-                                  Register lhs, int imm);
+  inline void emit_cond_jump(Condition, Label*, ValueKind value, Register lhs,
+                             Register rhs, const FreezeCacheState& frozen);
+  inline void emit_i32_cond_jumpi(Condition, Label*, Register lhs, int imm,
+                                  const FreezeCacheState& frozen);
   // Set {dst} to 1 if condition holds, 0 otherwise.
   inline void emit_i32_eqz(Register dst, Register src);
-  inline void emit_i32_set_cond(LiftoffCondition, Register dst, Register lhs,
+  inline void emit_i32_set_cond(Condition, Register dst, Register lhs,
                                 Register rhs);
   inline void emit_i64_eqz(Register dst, LiftoffRegister src);
-  inline void emit_i64_set_cond(LiftoffCondition condition, Register dst,
+  inline void emit_i64_set_cond(Condition condition, Register dst,
                                 LiftoffRegister lhs, LiftoffRegister rhs);
-  inline void emit_f32_set_cond(LiftoffCondition condition, Register dst,
+  inline void emit_f32_set_cond(Condition condition, Register dst,
                                 DoubleRegister lhs, DoubleRegister rhs);
-  inline void emit_f64_set_cond(LiftoffCondition condition, Register dst,
+  inline void emit_f64_set_cond(Condition condition, Register dst,
                                 DoubleRegister lhs, DoubleRegister rhs);
 
   // Optional select support: Returns false if generic code (via branches)
@@ -996,7 +1131,8 @@ class LiftoffAssembler : public TurboAssembler {
                           LiftoffRegister false_value, ValueKind kind);
 
   enum SmiCheckMode { kJumpOnSmi, kJumpOnNotSmi };
-  inline void emit_smi_check(Register obj, Label* target, SmiCheckMode mode);
+  inline void emit_smi_check(Register obj, Label* target, SmiCheckMode mode,
+                             const FreezeCacheState& frozen);
 
   inline void LoadTransform(LiftoffRegister dst, Register src_addr,
                             Register offset_reg, uintptr_t offset_imm,
@@ -1004,15 +1140,31 @@ class LiftoffAssembler : public TurboAssembler {
                             uint32_t* protected_load_pc);
   inline void LoadLane(LiftoffRegister dst, LiftoffRegister src, Register addr,
                        Register offset_reg, uintptr_t offset_imm, LoadType type,
-                       uint8_t lane, uint32_t* protected_load_pc);
+                       uint8_t lane, uint32_t* protected_load_pc,
+                       bool i64_offset);
   inline void StoreLane(Register dst, Register offset, uintptr_t offset_imm,
                         LiftoffRegister src, StoreType type, uint8_t lane,
-                        uint32_t* protected_store_pc);
+                        uint32_t* protected_store_pc, bool i64_offset);
   inline void emit_i8x16_shuffle(LiftoffRegister dst, LiftoffRegister lhs,
                                  LiftoffRegister rhs, const uint8_t shuffle[16],
                                  bool is_swizzle);
   inline void emit_i8x16_swizzle(LiftoffRegister dst, LiftoffRegister lhs,
                                  LiftoffRegister rhs);
+  inline void emit_i8x16_relaxed_swizzle(LiftoffRegister dst,
+                                         LiftoffRegister lhs,
+                                         LiftoffRegister rhs);
+  inline void emit_i32x4_relaxed_trunc_f32x4_s(LiftoffRegister dst,
+                                               LiftoffRegister src);
+  inline void emit_i32x4_relaxed_trunc_f32x4_u(LiftoffRegister dst,
+                                               LiftoffRegister src);
+  inline void emit_i32x4_relaxed_trunc_f64x2_s_zero(LiftoffRegister dst,
+                                                    LiftoffRegister src);
+  inline void emit_i32x4_relaxed_trunc_f64x2_u_zero(LiftoffRegister dst,
+                                                    LiftoffRegister src);
+  inline void emit_s128_relaxed_laneselect(LiftoffRegister dst,
+                                           LiftoffRegister src1,
+                                           LiftoffRegister src2,
+                                           LiftoffRegister mask);
   inline void emit_i8x16_popcnt(LiftoffRegister dst, LiftoffRegister src);
   inline void emit_i8x16_splat(LiftoffRegister dst, LiftoffRegister src);
   inline void emit_i16x8_splat(LiftoffRegister dst, LiftoffRegister src);
@@ -1182,6 +1334,16 @@ class LiftoffAssembler : public TurboAssembler {
   inline void emit_i16x8_q15mulr_sat_s(LiftoffRegister dst,
                                        LiftoffRegister src1,
                                        LiftoffRegister src2);
+  inline void emit_i16x8_relaxed_q15mulr_s(LiftoffRegister dst,
+                                           LiftoffRegister src1,
+                                           LiftoffRegister src2);
+  inline void emit_i16x8_dot_i8x16_i7x16_s(LiftoffRegister dst,
+                                           LiftoffRegister src1,
+                                           LiftoffRegister src2);
+  inline void emit_i32x4_dot_i8x16_i7x16_add_s(LiftoffRegister dst,
+                                               LiftoffRegister src1,
+                                               LiftoffRegister src2,
+                                               LiftoffRegister acc);
   inline void emit_i32x4_neg(LiftoffRegister dst, LiftoffRegister src);
   inline void emit_i32x4_alltrue(LiftoffRegister dst, LiftoffRegister src);
   inline void emit_i32x4_bitmask(LiftoffRegister dst, LiftoffRegister src);
@@ -1293,6 +1455,10 @@ class LiftoffAssembler : public TurboAssembler {
                               LiftoffRegister rhs);
   inline void emit_f32x4_pmax(LiftoffRegister dst, LiftoffRegister lhs,
                               LiftoffRegister rhs);
+  inline void emit_f32x4_relaxed_min(LiftoffRegister dst, LiftoffRegister lhs,
+                                     LiftoffRegister rhs);
+  inline void emit_f32x4_relaxed_max(LiftoffRegister dst, LiftoffRegister lhs,
+                                     LiftoffRegister rhs);
   inline void emit_f64x2_abs(LiftoffRegister dst, LiftoffRegister src);
   inline void emit_f64x2_neg(LiftoffRegister dst, LiftoffRegister src);
   inline void emit_f64x2_sqrt(LiftoffRegister dst, LiftoffRegister src);
@@ -1316,6 +1482,10 @@ class LiftoffAssembler : public TurboAssembler {
                               LiftoffRegister rhs);
   inline void emit_f64x2_pmax(LiftoffRegister dst, LiftoffRegister lhs,
                               LiftoffRegister rhs);
+  inline void emit_f64x2_relaxed_min(LiftoffRegister dst, LiftoffRegister lhs,
+                                     LiftoffRegister rhs);
+  inline void emit_f64x2_relaxed_max(LiftoffRegister dst, LiftoffRegister lhs,
+                                     LiftoffRegister rhs);
   inline void emit_f64x2_convert_low_i32x4_s(LiftoffRegister dst,
                                              LiftoffRegister src);
   inline void emit_f64x2_convert_low_i32x4_u(LiftoffRegister dst,
@@ -1414,20 +1584,25 @@ class LiftoffAssembler : public TurboAssembler {
   inline void emit_f64x2_replace_lane(LiftoffRegister dst, LiftoffRegister src1,
                                       LiftoffRegister src2,
                                       uint8_t imm_lane_idx);
+  inline void emit_f32x4_qfma(LiftoffRegister dst, LiftoffRegister src1,
+                              LiftoffRegister src2, LiftoffRegister src3);
+  inline void emit_f32x4_qfms(LiftoffRegister dst, LiftoffRegister src1,
+                              LiftoffRegister src2, LiftoffRegister src3);
+  inline void emit_f64x2_qfma(LiftoffRegister dst, LiftoffRegister src1,
+                              LiftoffRegister src2, LiftoffRegister src3);
+  inline void emit_f64x2_qfms(LiftoffRegister dst, LiftoffRegister src1,
+                              LiftoffRegister src2, LiftoffRegister src3);
 
   inline void StackCheck(Label* ool_code, Register limit_address);
-
-  inline void CallTrapCallbackForTesting();
 
   inline void AssertUnreachable(AbortReason reason);
 
   inline void PushRegisters(LiftoffRegList);
   inline void PopRegisters(LiftoffRegList);
 
-  inline void RecordSpillsInSafepoint(Safepoint& safepoint,
-                                      LiftoffRegList all_spills,
-                                      LiftoffRegList ref_spills,
-                                      int spill_offset);
+  inline void RecordSpillsInSafepoint(
+      SafepointTableBuilder::Safepoint& safepoint, LiftoffRegList all_spills,
+      LiftoffRegList ref_spills, int spill_offset);
 
   inline void DropStackSlotsAndRet(uint32_t num_stack_slots);
 
@@ -1436,9 +1611,10 @@ class LiftoffAssembler : public TurboAssembler {
   // this is the return value of the C function, stored in {rets[0]}. Further
   // outputs (specified in {sig->returns()}) are read from the buffer and stored
   // in the remaining {rets} registers.
-  inline void CallC(const ValueKindSig* sig, const LiftoffRegister* args,
-                    const LiftoffRegister* rets, ValueKind out_argument_kind,
-                    int stack_bytes, ExternalReference ext_ref);
+  inline void CallC(const std::initializer_list<VarState> args,
+                    const LiftoffRegister* rets, ValueKind return_kind,
+                    ValueKind out_argument_kind, int stack_bytes,
+                    ExternalReference ext_ref);
 
   inline void CallNativeWasmCode(Address addr);
   inline void TailCallNativeWasmCode(Address addr);
@@ -1447,7 +1623,7 @@ class LiftoffAssembler : public TurboAssembler {
                            compiler::CallDescriptor* call_descriptor,
                            Register target);
   inline void TailCallIndirect(Register target);
-  inline void CallRuntimeStub(WasmCode::RuntimeStubId sid);
+  inline void CallBuiltin(Builtin builtin);
 
   // Reserve space in the current frame, store address to space in {addr}.
   inline void AllocateStackSlot(Register addr, uint32_t size);
@@ -1506,6 +1682,12 @@ class LiftoffAssembler : public TurboAssembler {
  private:
   LiftoffRegister LoadI64HalfIntoRegister(VarState slot, RegPairHalf half);
 
+  // Spill one of the candidate registers.
+  V8_NOINLINE V8_PRESERVE_MOST LiftoffRegister
+  SpillOneRegister(LiftoffRegList candidates);
+  // Spill one or two fp registers to get a pair of adjacent fp registers.
+  LiftoffRegister SpillAdjacentFpRegisters(LiftoffRegList pinned);
+
   uint32_t num_locals_ = 0;
   static constexpr uint32_t kInlineLocalKinds = 16;
   union {
@@ -1521,13 +1703,17 @@ class LiftoffAssembler : public TurboAssembler {
   int ool_spill_space_size_ = 0;
   LiftoffBailoutReason bailout_reason_ = kSuccess;
   const char* bailout_detail_ = nullptr;
-
-  V8_NOINLINE LiftoffRegister SpillOneRegister(LiftoffRegList candidates);
-  // Spill one or two fp registers to get a pair of adjacent fp registers.
-  LiftoffRegister SpillAdjacentFpRegisters(LiftoffRegList pinned);
 };
 
 std::ostream& operator<<(std::ostream& os, LiftoffAssembler::VarState);
+
+#if DEBUG
+inline FreezeCacheState::FreezeCacheState(LiftoffAssembler& assm)
+    : assm_(assm) {
+  assm.SetCacheStateFrozen();
+}
+inline FreezeCacheState::~FreezeCacheState() { assm_.UnfreezeCacheState(); }
+#endif
 
 // =======================================================================
 // Partially platform-independent implementations of the platform-dependent
@@ -1555,8 +1741,7 @@ void EmitI64IndependentHalfOperation(LiftoffAssembler* assm,
     return;
   }
   // Otherwise, we need a temporary register.
-  Register tmp =
-      assm->GetUnusedRegister(kGpReg, LiftoffRegList::ForRegs(lhs, rhs)).gp();
+  Register tmp = assm->GetUnusedRegister(kGpReg, LiftoffRegList{lhs, rhs}).gp();
   (assm->*op)(tmp, lhs.low_gp(), rhs.low_gp());
   (assm->*op)(dst.high_gp(), lhs.high_gp(), rhs.high_gp());
   assm->Move(dst.low_gp(), tmp, kI32);
@@ -1583,8 +1768,7 @@ void EmitI64IndependentHalfOperationImm(LiftoffAssembler* assm,
     return;
   }
   // Otherwise, we need a temporary register.
-  Register tmp =
-      assm->GetUnusedRegister(kGpReg, LiftoffRegList::ForRegs(lhs)).gp();
+  Register tmp = assm->GetUnusedRegister(kGpReg, LiftoffRegList{lhs}).gp();
   (assm->*op)(tmp, lhs.low_gp(), low_word);
   (assm->*op)(dst.high_gp(), lhs.high_gp(), high_word);
   assm->Move(dst.low_gp(), tmp, kI32);
@@ -1625,6 +1809,10 @@ void LiftoffAssembler::emit_i64_xori(LiftoffRegister dst, LiftoffRegister lhs,
                                      int32_t imm) {
   liftoff::EmitI64IndependentHalfOperationImm<&LiftoffAssembler::emit_i32_xori>(
       this, dst, lhs, imm);
+}
+
+void LiftoffAssembler::emit_u32_to_uintptr(Register dst, Register src) {
+  // This is a no-op on 32-bit systems.
 }
 
 #endif  // V8_TARGET_ARCH_32_BIT
@@ -1689,7 +1877,7 @@ class LiftoffStackSlots {
 };
 
 #if DEBUG
-bool CheckCompatibleStackSlotTypes(ValueKind a, ValueKind b);
+bool CompatibleStackSlotTypes(ValueKind a, ValueKind b);
 #endif
 
 }  // namespace wasm
@@ -1707,8 +1895,6 @@ bool CheckCompatibleStackSlotTypes(ValueKind a, ValueKind b);
 #include "src/wasm/baseline/arm/liftoff-assembler-arm.h"
 #elif V8_TARGET_ARCH_PPC || V8_TARGET_ARCH_PPC64
 #include "src/wasm/baseline/ppc/liftoff-assembler-ppc.h"
-#elif V8_TARGET_ARCH_MIPS
-#include "src/wasm/baseline/mips/liftoff-assembler-mips.h"
 #elif V8_TARGET_ARCH_MIPS64
 #include "src/wasm/baseline/mips64/liftoff-assembler-mips64.h"
 #elif V8_TARGET_ARCH_LOONG64
@@ -1716,7 +1902,9 @@ bool CheckCompatibleStackSlotTypes(ValueKind a, ValueKind b);
 #elif V8_TARGET_ARCH_S390
 #include "src/wasm/baseline/s390/liftoff-assembler-s390.h"
 #elif V8_TARGET_ARCH_RISCV64
-#include "src/wasm/baseline/riscv64/liftoff-assembler-riscv64.h"
+#include "src/wasm/baseline/riscv/liftoff-assembler-riscv64.h"
+#elif V8_TARGET_ARCH_RISCV32
+#include "src/wasm/baseline/riscv/liftoff-assembler-riscv32.h"
 #else
 #error Unsupported architecture.
 #endif

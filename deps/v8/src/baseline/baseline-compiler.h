@@ -11,9 +11,11 @@
 #if ENABLE_SPARKPLUG
 
 #include "src/base/logging.h"
+#include "src/base/pointer-with-payload.h"
 #include "src/base/threaded-list.h"
 #include "src/base/vlq.h"
 #include "src/baseline/baseline-assembler.h"
+#include "src/execution/local-isolate.h"
 #include "src/handles/handles.h"
 #include "src/interpreter/bytecode-array-iterator.h"
 #include "src/interpreter/bytecode-register.h"
@@ -46,20 +48,18 @@ class BytecodeOffsetTableBuilder {
 
  private:
   size_t previous_pc_ = 0;
-  std::vector<byte> bytes_;
+  std::vector<uint8_t> bytes_;
 };
 
 class BaselineCompiler {
  public:
-  enum CodeLocation { kOffHeap, kOnHeap };
-  explicit BaselineCompiler(
-      Isolate* isolate, Handle<SharedFunctionInfo> shared_function_info,
-      Handle<BytecodeArray> bytecode,
-      CodeLocation code_location = CodeLocation::kOffHeap);
+  explicit BaselineCompiler(LocalIsolate* local_isolate,
+                            Handle<SharedFunctionInfo> shared_function_info,
+                            Handle<BytecodeArray> bytecode);
 
   void GenerateCode();
-  MaybeHandle<Code> Build(Isolate* isolate);
-  static int EstimateInstructionSize(BytecodeArray bytecode);
+  MaybeHandle<Code> Build(LocalIsolate* local_isolate);
+  static int EstimateInstructionSize(Tagged<BytecodeArray> bytecode);
 
  private:
   void Prologue();
@@ -81,7 +81,7 @@ class BaselineCompiler {
   // Constant pool operands.
   template <typename Type>
   Handle<Type> Constant(int operand_index);
-  Smi ConstantSmi(int operand_index);
+  Tagged<Smi> ConstantSmi(int operand_index);
   template <typename Type>
   void LoadConstant(Register output, int operand_index);
 
@@ -89,22 +89,28 @@ class BaselineCompiler {
   uint32_t Uint(int operand_index);
   int32_t Int(int operand_index);
   uint32_t Index(int operand_index);
-  uint32_t Flag(int operand_index);
+  uint32_t Flag8(int operand_index);
+  uint32_t Flag16(int operand_index);
   uint32_t RegisterCount(int operand_index);
-  TaggedIndex IndexAsTagged(int operand_index);
-  TaggedIndex UintAsTagged(int operand_index);
-  Smi IndexAsSmi(int operand_index);
-  Smi IntAsSmi(int operand_index);
-  Smi FlagAsSmi(int operand_index);
+  Tagged<TaggedIndex> IndexAsTagged(int operand_index);
+  Tagged<TaggedIndex> UintAsTagged(int operand_index);
+  Tagged<Smi> IndexAsSmi(int operand_index);
+  Tagged<Smi> IntAsSmi(int operand_index);
+  Tagged<Smi> Flag8AsSmi(int operand_index);
+  Tagged<Smi> Flag16AsSmi(int operand_index);
 
   // Jump helpers.
   Label* NewLabel();
   Label* BuildForwardJumpLabel();
-  void UpdateInterruptBudgetAndJumpToLabel(int weight, Label* label,
-                                           Label* skip_interrupt_label);
-  void UpdateInterruptBudgetAndDoInterpreterJump();
-  void UpdateInterruptBudgetAndDoInterpreterJumpIfRoot(RootIndex root);
-  void UpdateInterruptBudgetAndDoInterpreterJumpIfNotRoot(RootIndex root);
+  enum StackCheckBehavior {
+    kEnableStackCheck,
+    kDisableStackCheck,
+  };
+  void UpdateInterruptBudgetAndJumpToLabel(
+      int weight, Label* label, Label* skip_interrupt_label,
+      StackCheckBehavior stack_check_behavior);
+  void JumpIfRoot(RootIndex root);
+  void JumpIfNotRoot(RootIndex root);
 
   // Feedback vector.
   MemOperand FeedbackVector();
@@ -172,25 +178,63 @@ class BaselineCompiler {
 
   int max_call_args_ = 0;
 
-  struct ThreadedLabel {
-    Label label;
-    ThreadedLabel* ptr;
-    ThreadedLabel** next() { return &ptr; }
+  // Mark location as a jump target reachable via indirect branches, required
+  // for CFI.
+  enum class MarkAsIndirectJumpTarget { kNo, kYes };
+
+  struct BaselineLabelPointer : base::PointerWithPayload<Label, bool, 1> {
+    void MarkAsIndirectJumpTarget() { SetPayload(true); }
+    bool IsIndirectJumpTarget() const { return GetPayload(); }
   };
 
-  struct BaselineLabels {
-    base::ThreadedList<ThreadedLabel> linked;
-    Label unlinked;
-  };
-
-  BaselineLabels* EnsureLabels(int i) {
-    if (labels_[i] == nullptr) {
-      labels_[i] = zone_.New<BaselineLabels>();
+  Label* EnsureLabel(
+      int i, MarkAsIndirectJumpTarget mark = MarkAsIndirectJumpTarget::kNo) {
+    if (labels_[i].GetPointer() == nullptr) {
+      labels_[i].SetPointer(zone_.New<Label>());
     }
-    return labels_[i];
+    if (mark == MarkAsIndirectJumpTarget::kYes) {
+      labels_[i].MarkAsIndirectJumpTarget();
+    }
+    return labels_[i].GetPointer();
   }
 
-  BaselineLabels** labels_;
+  BaselineLabelPointer* labels_;
+
+#ifdef DEBUG
+  friend class SaveAccumulatorScope;
+
+  struct EffectState {
+    bool may_have_deopted = false;
+    bool accumulator_on_stack = false;
+    bool safe_to_skip = false;
+
+    void MayDeopt() {
+      DCHECK(!accumulator_on_stack);
+      may_have_deopted = true;
+    }
+
+    void CheckEffect() { DCHECK(!may_have_deopted || safe_to_skip); }
+
+    void clear() {
+      DCHECK(!accumulator_on_stack);
+      *this = EffectState();
+    }
+  } effect_state_;
+#endif
+};
+
+class SaveAccumulatorScope final {
+ public:
+  SaveAccumulatorScope(BaselineCompiler* compiler,
+                       BaselineAssembler* assembler);
+
+  ~SaveAccumulatorScope();
+
+ private:
+#ifdef DEBUG
+  BaselineCompiler* compiler_;
+#endif
+  BaselineAssembler* assembler_;
 };
 
 }  // namespace baseline

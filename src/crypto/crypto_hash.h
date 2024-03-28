@@ -3,10 +3,9 @@
 
 #if defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 
+#include "base_object.h"
 #include "crypto/crypto_keys.h"
 #include "crypto/crypto_util.h"
-#include "allocated_buffer.h"
-#include "base_object.h"
 #include "env.h"
 #include "memory_tracker.h"
 #include "v8.h"
@@ -26,6 +25,8 @@ class Hash final : public BaseObject {
   bool HashUpdate(const char* data, size_t len);
 
   static void GetHashes(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void GetCachedAliases(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void OneShotDigest(const v8::FunctionCallbackInfo<v8::Value>& args);
 
  protected:
   static void New(const v8::FunctionCallbackInfo<v8::Value>& args);
@@ -35,7 +36,7 @@ class Hash final : public BaseObject {
   Hash(Environment* env, v8::Local<v8::Object> wrap);
 
  private:
-  EVPMDPointer mdctx_ {};
+  EVPMDCtxPointer mdctx_{};
   unsigned int md_len_ = 0;
   ByteSource digest_;
 };
@@ -82,6 +83,8 @@ struct HashTraits final {
 };
 
 using HashJob = DeriveBitsJob<HashTraits>;
+
+void InternalVerifyIntegrity(const v8::FunctionCallbackInfo<v8::Value>& args);
 
 }  // namespace crypto
 }  // namespace node
