@@ -74,6 +74,7 @@ class ExternalReferenceRegistry {
   V(heap_utils)                                                                \
   V(messaging)                                                                 \
   V(mksnapshot)                                                                \
+  V(module_wrap)                                                               \
   V(options)                                                                   \
   V(os)                                                                        \
   V(performance)                                                               \
@@ -86,6 +87,7 @@ class ExternalReferenceRegistry {
   V(url)                                                                       \
   V(util)                                                                      \
   V(pipe_wrap)                                                                 \
+  V(sea)                                                                       \
   V(serdes)                                                                    \
   V(string_decoder)                                                            \
   V(stream_wrap)                                                               \

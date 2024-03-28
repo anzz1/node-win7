@@ -182,6 +182,7 @@ class Request {
         this.headers += `content-type: ${contentType}\r\n`
       }
       this.body = bodyStream.stream
+      this.contentLength = bodyStream.length
     } else if (util.isBlobLike(body) && this.contentType == null && body.type) {
       this.contentType = body.type
       this.headers += `content-type: ${body.type}\r\n`
@@ -320,7 +321,8 @@ function processHeader (request, key, val) {
     key.toLowerCase() === 'content-type'
   ) {
     request.contentType = val
-    request.headers += processHeaderValue(key, val)
+    if (skipAppend) request.headers[key] = processHeaderValue(key, val, skipAppend)
+    else request.headers += processHeaderValue(key, val)
   } else if (
     key.length === 17 &&
     key.toLowerCase() === 'transfer-encoding'

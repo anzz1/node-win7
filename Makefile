@@ -170,7 +170,7 @@ with-code-cache test-code-cache:
 
 out/Makefile: config.gypi common.gypi node.gyp \
 	deps/uv/uv.gyp deps/llhttp/llhttp.gyp deps/zlib/zlib.gyp \
-	deps/simdutf/simdutf.gyp \
+	deps/simdutf/simdutf.gyp deps/ada/ada.gyp \
 	tools/v8_gypfiles/toolchain.gypi tools/v8_gypfiles/features.gypi \
 	tools/v8_gypfiles/inspector.gypi tools/v8_gypfiles/v8.gyp
 	$(PYTHON) tools/gyp_node.py -f make
@@ -366,6 +366,9 @@ test-check-deopts: all
 DOCBUILDSTAMP_PREREQS = tools/doc/addon-verify.mjs doc/api/addons.md
 
 ifeq ($(OSTYPE),aix)
+DOCBUILDSTAMP_PREREQS := $(DOCBUILDSTAMP_PREREQS) out/$(BUILDTYPE)/node.exp
+endif
+ifeq ($(OSTYPE),os400)
 DOCBUILDSTAMP_PREREQS := $(DOCBUILDSTAMP_PREREQS) out/$(BUILDTYPE)/node.exp
 endif
 
@@ -1411,7 +1414,6 @@ LINT_CPP_ADDON_DOC_FILES = $(wildcard $(LINT_CPP_ADDON_DOC_FILES_GLOB))
 LINT_CPP_EXCLUDE ?=
 LINT_CPP_EXCLUDE += src/node_root_certs.h
 LINT_CPP_EXCLUDE += $(LINT_CPP_ADDON_DOC_FILES)
-LINT_CPP_EXCLUDE += $(wildcard test/js-native-api/??_*/*.cc test/js-native-api/??_*/*.h test/node-api/??_*/*.cc test/node-api/??_*/*.h)
 # These files were copied more or less verbatim from V8.
 LINT_CPP_EXCLUDE += src/tracing/trace_event.h src/tracing/trace_event_common.h
 
@@ -1431,9 +1433,7 @@ LINT_CPP_FILES = $(filter-out $(LINT_CPP_EXCLUDE), $(wildcard \
 	test/embedding/*.h \
 	test/fixtures/*.c \
 	test/js-native-api/*/*.cc \
-	test/js-native-api/*/*.h \
 	test/node-api/*/*.cc \
-	test/node-api/*/*.h \
 	tools/icu/*.cc \
 	tools/icu/*.h \
 	tools/code_cache/*.cc \
@@ -1441,6 +1441,18 @@ LINT_CPP_FILES = $(filter-out $(LINT_CPP_EXCLUDE), $(wildcard \
 	tools/snapshot/*.cc \
 	tools/snapshot/*.h \
 	))
+
+FORMAT_CPP_FILES ?=
+FORMAT_CPP_FILES += $(LINT_CPP_FILES)
+# C source codes.
+FORMAT_CPP_FILES += $(wildcard \
+	benchmark/napi/*/*.c \
+	test/js-native-api/*.h \
+	test/js-native-api/*/*.c \
+	test/js-native-api/*/*.h \
+	test/node-api/*/*.c \
+	test/node-api/*/*.h \
+	)
 
 # Code blocks don't have newline at the end,
 # and the actual filename is generated so it won't match header guards
@@ -1470,7 +1482,7 @@ ifneq ("","$(wildcard tools/clang-format/node_modules/)")
 		--binary=tools/clang-format/node_modules/.bin/clang-format \
 		--style=file \
 		$(CLANG_FORMAT_START) -- \
-		$(LINT_CPP_FILES)
+		$(FORMAT_CPP_FILES)
 else
 	$(info Required tooling for C++ code formatting is not installed.)
 	$(info To install (requires internet access) run: $$ make format-cpp-build)
@@ -1504,22 +1516,22 @@ cpplint: lint-cpp
 	$(warning Please use lint-cpp instead of cpplint)
 
 .PHONY: lint-py-build
-# python -m pip install flake8
+# python -m pip install ruff
 # Try with '--system' if it fails without; the system may have set '--user'
 lint-py-build:
-	$(info Pip installing flake8 linter on $(shell $(PYTHON) --version)...)
-	$(PYTHON) -m pip install --no-user --upgrade -t tools/pip/site-packages flake8 || \
-		$(PYTHON) -m pip install --no-user --upgrade --system -t tools/pip/site-packages flake8
+	$(info Pip installing ruff on $(shell $(PYTHON) --version)...)
+	$(PYTHON) -m pip install --upgrade --target tools/pip/site-packages ruff==0.0.272 || \
+		$(PYTHON) -m pip install --upgrade --system --target tools/pip/site-packages ruff==0.0.272
 
 .PHONY: lint-py
-ifneq ("","$(wildcard tools/pip/site-packages/flake8)")
-# Lints the Python code with flake8.
-# Flag the build if there are Python syntax errors or undefined names
+ifneq ("","$(wildcard tools/pip/site-packages/ruff)")
+# Lint the Python code with ruff.
 lint-py:
-	PYTHONPATH=tools/pip $(PYTHON) -m flake8 --count --show-source --statistics .
+	tools/pip/site-packages/bin/ruff --version
+	tools/pip/site-packages/bin/ruff .
 else
 lint-py:
-	$(warning Python linting with flake8 is not available)
+	$(warning Python linting with ruff is not available)
 	$(warning Run 'make lint-py-build')
 endif
 
@@ -1528,8 +1540,8 @@ endif
 # Try with '--system' if it fails without; the system may have set '--user'
 lint-yaml-build:
 	$(info Pip installing yamllint on $(shell $(PYTHON) --version)...)
-	$(PYTHON) -m pip install --no-user --upgrade -t tools/pip/site-packages yamllint || \
-		$(PYTHON) -m pip install --no-user --upgrade --system -t tools/pip/site-packages yamllint
+	$(PYTHON) -m pip install --upgrade -t tools/pip/site-packages yamllint || \
+		$(PYTHON) -m pip install --upgrade --system -t tools/pip/site-packages yamllint
 
 .PHONY: lint-yaml
 # Lints the YAML files with yamllint.

@@ -1,5 +1,6 @@
 const t = require('tap')
 const { load: loadMockNpm } = require('../../fixtures/mock-npm')
+const { cleanZlib } = require('../../fixtures/clean-snapshot')
 const MockRegistry = require('@npmcli/mock-registry')
 const pacote = require('pacote')
 const Arborist = require('@npmcli/arborist')
@@ -19,12 +20,7 @@ const pkgJson = {
   version: '1.0.0',
 }
 
-t.cleanSnapshot = data => {
-  return data.replace(/shasum:.*/g, 'shasum:{sha}')
-    .replace(/integrity:.*/g, 'integrity:{sha}')
-    .replace(/"shasum": ".*",/g, '"shasum": "{sha}",')
-    .replace(/"integrity": ".*",/g, '"integrity": "{sha}",')
-}
+t.cleanSnapshot = data => cleanZlib(data)
 
 t.test('respects publishConfig.registry, runs appropriate scripts', async t => {
   const { npm, joinedOutput, prefix } = await loadMockNpm(t, {
@@ -171,9 +167,94 @@ t.test('dry-run', async t => {
   t.matchSnapshot(logs.notice)
 })
 
+t.test('foreground-scripts defaults to true', async t => {
+  const { joinedOutput, npm, logs } = await loadMockNpm(t, {
+    config: {
+      'dry-run': true,
+      ...auth,
+    },
+    prefixDir: {
+      'package.json': JSON.stringify({
+        name: 'test-fg-scripts',
+        version: '0.0.0',
+        scripts: {
+          prepack: 'echo prepack!',
+          postpack: 'echo postpack!',
+        },
+      }
+      ),
+    },
+  })
+
+  /* eslint no-console: 0 */
+  // TODO: replace this with `const results = t.intercept(console, 'log')`
+  const log = console.log
+  t.teardown(() => {
+    console.log = log
+  })
+  const caughtLogs = []
+  console.log = (...args) => {
+    caughtLogs.push(args)
+  }
+  // end TODO
+
+  await npm.exec('publish', [])
+  t.equal(joinedOutput(), `+ test-fg-scripts@0.0.0`)
+  t.matchSnapshot(logs.notice)
+
+  t.same(
+    caughtLogs,
+    [
+      ['\n> test-fg-scripts@0.0.0 prepack\n> echo prepack!\n'],
+      ['\n> test-fg-scripts@0.0.0 postpack\n> echo postpack!\n'],
+    ],
+    'prepack and postpack log to stdout')
+})
+
+t.test('foreground-scripts can still be set to false', async t => {
+  const { joinedOutput, npm, logs } = await loadMockNpm(t, {
+    config: {
+      'dry-run': true,
+      'foreground-scripts': false,
+      ...auth,
+    },
+    prefixDir: {
+      'package.json': JSON.stringify({
+        name: 'test-fg-scripts',
+        version: '0.0.0',
+        scripts: {
+          prepack: 'echo prepack!',
+          postpack: 'echo postpack!',
+        },
+      }
+      ),
+    },
+  })
+
+  /* eslint no-console: 0 */
+  // TODO: replace this with `const results = t.intercept(console, 'log')`
+  const log = console.log
+  t.teardown(() => {
+    console.log = log
+  })
+  const caughtLogs = []
+  console.log = (...args) => {
+    caughtLogs.push(args)
+  }
+  // end TODO
+
+  await npm.exec('publish', [])
+  t.equal(joinedOutput(), `+ test-fg-scripts@0.0.0`)
+  t.matchSnapshot(logs.notice)
+
+  t.same(
+    caughtLogs,
+    [],
+    'prepack and postpack do not log to stdout')
+})
+
 t.test('shows usage with wrong set of arguments', async t => {
-  const { npm } = await loadMockNpm(t)
-  const publish = await npm.cmd('publish')
+  const { publish } = await loadMockNpm(t, { command: 'publish' })
   await t.rejects(publish.exec(['a', 'b', 'c']), publish.usage)
 })
 
@@ -719,4 +800,55 @@ t.test('public access', async t => {
   await npm.exec('publish', [])
   t.matchSnapshot(joinedOutput(), 'new package version')
   t.matchSnapshot(logs.notice)
+})
+
+t.test('manifest', async t => {
+  // https://github.com/npm/cli/pull/6470#issuecomment-1571234863
+
+  // snapshot test that was generated against v9.6.7 originally to ensure our
+  // own manifest does not change unexpectedly when publishing. this test
+  // asserts a bunch of keys are there that will change often and then snapshots
+  // the rest of the manifest.
+
+  const root = path.resolve(__dirname, '../../..')
+  const npmPkg = require(path.join(root, 'package.json'))
+
+  t.cleanSnapshot = (s) => s.replace(new RegExp(npmPkg.version, 'g'), '{VERSION}')
+
+  let manifest = null
+  const { npm } = await loadMockNpm(t, {
+    config: {
+      ...auth,
+    },
+    chdir: () => root,
+    mocks: {
+      libnpmpublish: {
+        publish: (m) => manifest = m,
+      },
+    },
+  })
+  await npm.exec('publish', [])
+
+  const okKeys = [
+    'contributors',
+    'bundleDependencies',
+    'dependencies',
+    'devDependencies',
+    'templateOSS',
+    'scripts',
+    'tap',
+    'readme',
+    'engines',
+    'workspaces',
+  ]
+
+  for (const k of okKeys) {
+    t.ok(manifest[k], k)
+    delete manifest[k]
+  }
+  delete manifest.gitHead
+
+  manifest.man.sort()
+
+  t.matchSnapshot(manifest, 'manifest')
 })

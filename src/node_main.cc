@@ -28,17 +28,20 @@
 #include <WinError.h>
 
 #define SKIP_CHECK_VAR "NODE_SKIP_PLATFORM_CHECK"
-#define SKIP_CHECK_SIZE 1
 #define SKIP_CHECK_VALUE "1"
+#define SKIP_CHECK_STRLEN (sizeof(SKIP_CHECK_VALUE) - 1)
 
 int wmain(int argc, wchar_t* wargv[]) {
-  char buf[SKIP_CHECK_SIZE + 1];
+  char buf[SKIP_CHECK_STRLEN + 1];
   if (!IsWindows7OrGreater() &&
       (GetEnvironmentVariableA(SKIP_CHECK_VAR, buf, sizeof(buf)) !=
-       SKIP_CHECK_SIZE ||
-       strncmp(buf, SKIP_CHECK_VALUE, SKIP_CHECK_SIZE + 1) != 0)) {
-    fprintf(stderr, "This application is only supported on Windows 7, "
-                    "Windows Server 2008 R2, or higher.");
+           SKIP_CHECK_STRLEN ||
+       strncmp(buf, SKIP_CHECK_VALUE, SKIP_CHECK_STRLEN) != 0)) {
+    fprintf(stderr, "Node.js is only supported on Windows 7 or higher.\n"
+                    "Setting the " SKIP_CHECK_VAR " environment variable "
+                    "to 1 skips this\ncheck, but Node.js might not execute "
+                    "correctly. Any issues encountered on\nunsupported "
+                    "platforms will not be fixed.");
     exit(ERROR_EXE_MACHINE_TYPE_MISMATCH);
   }
 

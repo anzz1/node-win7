@@ -1,7 +1,10 @@
 const t = require('tap')
 const { load: loadMockNpm } = require('../../fixtures/mock-npm')
+const { cleanZlib } = require('../../fixtures/clean-snapshot')
 const path = require('path')
 const fs = require('fs')
+
+t.cleanSnapshot = data => cleanZlib(data)
 
 t.test('should pack current directory with no arguments', async t => {
   const { npm, outputs, logs } = await loadMockNpm(t, {
@@ -28,8 +31,8 @@ t.test('follows pack-destination config', async t => {
       }),
       'tar-destination': {},
     },
+    config: ({ prefix }) => ({ 'pack-destination': path.join(prefix, 'tar-destination') }),
   })
-  npm.config.set('pack-destination', path.join(npm.prefix, 'tar-destination'))
   await npm.exec('pack', [])
   const filename = 'test-package-1.0.0.tgz'
   t.strictSame(outputs, [[filename]])
@@ -59,8 +62,8 @@ t.test('should log output as valid json', async t => {
         version: '1.0.0',
       }),
     },
+    config: { json: true },
   })
-  npm.config.set('json', true)
   await npm.exec('pack', [])
   const filename = 'test-package-1.0.0.tgz'
   t.matchSnapshot(outputs.map(JSON.parse), 'outputs as json')
@@ -76,8 +79,8 @@ t.test('should log scoped package output as valid json', async t => {
         version: '1.0.0',
       }),
     },
+    config: { json: true },
   })
-  npm.config.set('json', true)
   await npm.exec('pack', [])
   const filename = 'myscope-test-package-1.0.0.tgz'
   t.matchSnapshot(outputs.map(JSON.parse), 'outputs as json')
@@ -93,10 +96,91 @@ t.test('dry run', async t => {
         version: '1.0.0',
       }),
     },
+    config: { 'dry-run': true },
   })
-  npm.config.set('dry-run', true)
   await npm.exec('pack', [])
   const filename = 'test-package-1.0.0.tgz'
+  t.strictSame(outputs, [[filename]])
+  t.matchSnapshot(logs.notice.map(([, m]) => m), 'logs pack contents')
+  t.throws(() => fs.statSync(path.resolve(npm.prefix, filename)))
+})
+
+t.test('foreground-scripts defaults to true', async t => {
+  const { npm, outputs, logs } = await loadMockNpm(t, {
+    prefixDir: {
+      'package.json': JSON.stringify({
+        name: 'test-fg-scripts',
+        version: '0.0.0',
+        scripts: {
+          prepack: 'echo prepack!',
+          postpack: 'echo postpack!',
+        },
+      }
+      ),
+    },
+    config: { 'dry-run': true },
+  })
+
+  /* eslint no-console: 0 */
+  // TODO: replace this with `const results = t.intercept(console, 'log')`
+  const log = console.log
+  t.teardown(() => {
+    console.log = log
+  })
+  const caughtLogs = []
+  console.log = (...args) => {
+    caughtLogs.push(args)
+  }
+  // end TODO
+
+  await npm.exec('pack', [])
+  const filename = 'test-fg-scripts-0.0.0.tgz'
+  t.same(
+    caughtLogs,
+    [
+      ['\n> test-fg-scripts@0.0.0 prepack\n> echo prepack!\n'],
+      ['\n> test-fg-scripts@0.0.0 postpack\n> echo postpack!\n'],
+    ],
+    'prepack and postpack log to stdout')
+  t.strictSame(outputs, [[filename]])
+  t.matchSnapshot(logs.notice.map(([, m]) => m), 'logs pack contents')
+  t.throws(() => fs.statSync(path.resolve(npm.prefix, filename)))
+})
+
+t.test('foreground-scripts can still be set to false', async t => {
+  const { npm, outputs, logs } = await loadMockNpm(t, {
+    prefixDir: {
+      'package.json': JSON.stringify({
+        name: 'test-fg-scripts',
+        version: '0.0.0',
+        scripts: {
+          prepack: 'echo prepack!',
+          postpack: 'echo postpack!',
+        },
+      }
+      ),
+    },
+    config: { 'dry-run': true, 'foreground-scripts': false },
+  })
+
+  /* eslint no-console: 0 */
+  // TODO: replace this with `const results = t.intercept(console, 'log')`
+  const log = console.log
+  t.teardown(() => {
+    console.log = log
+  })
+  const caughtLogs = []
+  console.log = (...args) => {
+    caughtLogs.push(args)
+  }
+  // end TODO
+
+  await npm.exec('pack', [])
+  const filename = 'test-fg-scripts-0.0.0.tgz'
+  t.same(
+    caughtLogs,
+    [],
+    'prepack and postpack do not log to stdout')
   t.strictSame(outputs, [[filename]])
   t.matchSnapshot(logs.notice.map(([, m]) => m), 'logs pack contents')
   t.throws(() => fs.statSync(path.resolve(npm.prefix, filename)))

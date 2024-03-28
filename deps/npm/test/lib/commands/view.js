@@ -101,6 +101,7 @@ const packument = (nv, opts) => {
         email: 'foo@yellow.com',
         twitter: 'foo',
       },
+      empty: '',
       readme: 'a very useful readme',
       versions: {
         '1.0.0': {
@@ -249,6 +250,8 @@ const packument = (nv, opts) => {
           },
         },
         '1.0.1': {},
+        '100000000000000000.0.0': {
+        },
       },
     },
   }
@@ -270,6 +273,10 @@ const loadMockNpm = async function (t, opts = {}) {
       },
     },
     ...opts,
+    config: {
+      color: 'always',
+      ...opts.config,
+    },
   })
   return mockNpm
 }
@@ -307,6 +314,12 @@ t.test('package with maintainers info as object', async t => {
 t.test('package with homepage', async t => {
   const { view, outputs } = await loadMockNpm(t, { config: { unicode: false } })
   await view.exec(['orange@1.0.0'])
+  t.matchSnapshot(outputs.join('\n'))
+})
+
+t.test('package with invalid version', async t => {
+  const { view, outputs } = await loadMockNpm(t, { config: { unicode: false } })
+  await view.exec(['orange', 'versions'])
   t.matchSnapshot(outputs.join('\n'))
 })
 
@@ -374,7 +387,7 @@ t.test('package in cwd', async t => {
 })
 
 t.test('specific field names', async t => {
-  const { view, outputs } = await loadMockNpm(t)
+  const { view, outputs } = await loadMockNpm(t, { config: { color: false } })
   t.afterEach(() => outputs.length = 0)
 
   t.test('readme', async t => {
@@ -419,6 +432,11 @@ t.test('specific field names', async t => {
 
   t.test('array field - 2 elements', async t => {
     await view.exec(['yellow@1.x.x', 'maintainers.name'])
+    t.matchSnapshot(outputs.join('\n'))
+  })
+
+  t.test('fields with empty values', async t => {
+    await view.exec(['yellow', 'empty'])
     t.matchSnapshot(outputs.join('\n'))
   })
 })
@@ -572,8 +590,7 @@ t.test('workspaces', async t => {
 })
 
 t.test('completion', async t => {
-  const { npm } = await loadMockNpm(t)
-  const view = await npm.cmd('view')
+  const { view } = await loadMockNpm(t, { command: 'view' })
   const res = await view.completion({
     conf: { argv: { remain: ['npm', 'view', 'green@1.0.0'] } },
   })
@@ -581,8 +598,7 @@ t.test('completion', async t => {
 })
 
 t.test('no package completion', async t => {
-  const { npm } = await loadMockNpm(t)
-  const view = await npm.cmd('view')
+  const { view } = await loadMockNpm(t, { command: 'view' })
   const res = await view.completion({ conf: { argv: { remain: ['npm', 'view'] } } })
   t.notOk(res, 'there is no package completion')
   t.end()

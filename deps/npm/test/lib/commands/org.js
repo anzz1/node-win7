@@ -1,6 +1,6 @@
 const t = require('tap')
-const ansiTrim = require('../../../lib/utils/ansi-trim.js')
 const mockNpm = require('../../fixtures/mock-npm')
+const { stripVTControlCharacters } = require('node:util')
 
 const mockOrg = async (t, { orgSize = 1, orgList = {}, ...npmOpts } = {}) => {
   let setArgs = null
@@ -30,6 +30,7 @@ const mockOrg = async (t, { orgSize = 1, orgList = {}, ...npmOpts } = {}) => {
 
   const mock = await mockNpm(t, {
     ...npmOpts,
+    command: 'org',
     mocks: {
       libnpmorg,
       ...npmOpts.mocks,
@@ -38,11 +39,6 @@ const mockOrg = async (t, { orgSize = 1, orgList = {}, ...npmOpts } = {}) => {
 
   return {
     ...mock,
-    org: {
-      exec: (args) => mock.npm.exec('org', args),
-      completion: (arg) => mock.npm.cmd('org').then(c => c.completion(arg)),
-      usage: () => mock.npm.cmd('org').then(c => c.usage),
-    },
     setArgs: () => setArgs,
     rmArgs: () => rmArgs,
     lsArgs: () => lsArgs,
@@ -77,7 +73,7 @@ t.test('completion', async t => {
 
 t.test('npm org - invalid subcommand', async t => {
   const { org } = await mockOrg(t)
-  await t.rejects(org.exec(['foo']), org.usage())
+  await t.rejects(org.exec(['foo']), org.usage)
 })
 
 t.test('npm org add', async t => {
@@ -431,7 +427,7 @@ t.test('npm org ls', async t => {
     },
     'receieved the correct args'
   )
-  const out = ansiTrim(outputs[0][0])
+  const out = stripVTControlCharacters(outputs[0][0])
   t.match(out, /one.*developer/, 'contains the developer member')
   t.match(out, /two.*admin/, 'contains the admin member')
   t.match(out, /three.*owner/, 'contains the owner member')
@@ -456,7 +452,7 @@ t.test('npm org ls - user filter', async t => {
     },
     'receieved the correct args'
   )
-  const out = ansiTrim(outputs[0][0])
+  const out = stripVTControlCharacters(outputs[0][0])
   t.match(out, /username.*admin/, 'contains the filtered member')
   t.notMatch(out, /missing.*admin/, 'does not contain other members')
 })
@@ -479,7 +475,7 @@ t.test('npm org ls - user filter, missing user', async t => {
     },
     'receieved the correct args'
   )
-  const out = ansiTrim(outputs[0][0])
+  const out = stripVTControlCharacters(outputs[0][0])
   t.notMatch(out, /username/, 'does not contain the requested member')
   t.notMatch(out, /missing.*admin/, 'does not contain other members')
 })

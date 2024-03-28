@@ -292,8 +292,11 @@ module, you can use the `--filter` option:_
   --no-progress                 don't show benchmark progress indicator
 ```
 
-For analysing the benchmark results, use [node-benchmark-compare][] or the R
-script `benchmark/compare.R`.
+For analyzing the benchmark results, use [node-benchmark-compare][] or the R
+scripts:
+
+* `benchmark/compare.R`
+* `benchmark/bar.R`
 
 ```console
 $ node-benchmark-compare compare-pr-5134.csv # or cat compare-pr-5134.csv | Rscript benchmark/compare.R

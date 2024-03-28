@@ -77,22 +77,15 @@ const mockDist = async (t, { ...npmOpts } = {}) => {
 
   const mock = await mockNpm(t, {
     ...npmOpts,
+    command: 'dist-tag',
     mocks: {
       'npm-registry-fetch': Object.assign(nrf, realFetch, { json: getTag }),
     },
   })
 
-  const usage = await mock.npm.cmd('dist-tag').then(c => c.usage)
-
   return {
     ...mock,
-    distTag: {
-      exec: (args) => mock.npm.exec('dist-tag', args),
-      usage,
-      completion: (remain) => mock.npm.cmd('dist-tag').then(c => c.completion({
-        conf: { argv: { remain } },
-      })),
-    },
+    distTag: mock['dist-tag'],
     fetchOpts: () => fetchOpts,
     result: () => mock.joinedOutput(),
     logs: () => {
@@ -325,6 +318,15 @@ t.test('add missing pkg name', async t => {
   )
 })
 
+t.test('add invalid tag', async t => {
+  const { distTag } = await mockDist(t)
+  await t.rejects(
+    distTag.exec(['add', '@tag']),
+    { code: 'EINVALIDTAGNAME' },
+    'should exit with invalid tag name error'
+  )
+})
+
 t.test('set existing version', async t => {
   const { distTag, logs } = await mockDist(t)
   await distTag.exec(['set', '@scoped/another@0.6.0', 'b'])
@@ -365,10 +367,10 @@ t.test('remove missing pkg name', async t => {
 t.test('completion', async t => {
   const { distTag } = await mockDist(t)
 
-  const match = distTag.completion(['npm', 'dist-tag'])
+  const match = distTag.completion({ conf: { argv: { remain: ['npm', 'dist-tag'] } } })
   t.resolveMatch(match, ['add', 'rm', 'ls'],
     'should list npm dist-tag commands for completion')
 
-  const noMatch = distTag.completion(['npm', 'dist-tag', 'foobar'])
+  const noMatch = distTag.completion({ conf: { argv: { remain: ['npm', 'dist-tag', 'foobar'] } } })
   t.resolveMatch(noMatch, [])
 })
