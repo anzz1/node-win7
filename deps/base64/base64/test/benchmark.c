@@ -141,7 +141,7 @@ base64_gettime (base64_timespec *t)
 {
 	FILETIME current_time_ft;
 
-	GetSystemTimePreciseAsFileTime(&current_time_ft);
+	GetSystemTimeAsFileTime(&current_time_ft);
 
 	t->LowPart  = current_time_ft.dwLowDateTime;
 	t->HighPart = current_time_ft.dwHighDateTime;
